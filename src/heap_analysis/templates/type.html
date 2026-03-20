@@ -1,0 +1,12 @@
+{% import 'components.html' as components %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Instances of type {{ type_name }} - {{ dump_name }}</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Instances of type {{ type_name }} in Heap Dump: {{ dump_name }}</h1>
+    {{ components.object_list(objects, dump_name) }}
+</body>
+</html>

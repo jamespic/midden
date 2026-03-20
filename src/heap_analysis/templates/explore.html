@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Heap Dump Overview - {{ dump_name }}</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Heap Dump Overview: {{ dump_name }}</h1>
+    <table>
+        <tr>
+            <th>Type</th>
+            <th>Instance Count</th>
+        </tr>
+        {% for type_name, count in type_counts %}
+        <tr>
+            <td><a href="{{ url_for('explore_type', dump_name=dump_name, type_name=type_name) }}">{{ type_name }}</a></td>
+            <td>{{ count }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{% import 'components.html' as components %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ obj.type }} instance {{ obj.id }} - {{ dump_name }}</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>{{ obj.type }} instance {{ obj.id }} in Heap Dump: {{ dump_name }}</h1>
+    <dl>
+        <dt>Type:</dt>
+        <dd><a href="{{ url_for('explore_type', type_name=obj.type, dump_name=dump_name) }}">{{ obj.type }}</a></dd>
+        <dt>ID:</dt>
+        <dd>{{ obj.id }}</dd>
+        {% if obj.value is not none %}
+        <dt>Value:</dt>
+        <dd>{{ obj.value }}</dd>
+        {% endif %}
+    </dl>
+    {% if obj.referrers %}
+    <h2>Referrers</h2>
+    {{ components.object_list(obj.referrers, dump_name) }}
+    {% endif %}
+    {% if obj.references %}
+    <h2>References</h2>
+    {{ components.object_list(obj.references, dump_name) }}
+    {% endif %}
+</body>
+</html>

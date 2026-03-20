@@ -1,0 +1,11 @@
+body { font-family: Arial, sans-serif; margin: 2em; }
+table { border-collapse: collapse; width: 50%; }
+th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+th { background: #f4f4f4; }
+h1 { margin-bottom: 1em; }
+ul { margin-bottom: 2em; }
+li { margin: 0.5em 0; }
+form { border: 1px solid #ccc; padding: 1em; width: 350px; background: #f9f9f9; }
+label { display: block; margin-bottom: 0.5em; }
+input[type="text"], input[type="file"] { width: 100%; margin-bottom: 1em; }
+input[type="submit"] { padding: 0.5em 1em; }
