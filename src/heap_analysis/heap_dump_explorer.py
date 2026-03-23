@@ -10,7 +10,13 @@ from collections import Counter
 from lmdb import Environment, Transaction
 from threading import local
 from functools import wraps
-from typing import ParamSpec, Callable, TypeVar, Generic, overload, Literal, Iterable
+from typing import (
+    ParamSpec,
+    Callable,
+    TypeVar,
+    Iterable,
+    Generator,
+)
 
 from pydantic import BaseModel, ConfigDict
 
@@ -18,16 +24,7 @@ from pydantic import BaseModel, ConfigDict
 P = ParamSpec("P")
 T = TypeVar("T")
 F = Callable[P, T]
-
-
-class ObjectRecord(BaseModel, Generic[T]):
-    id: int
-    type: str
-    references: list[T]
-    referrers: list[T] = []
-    value: str | int | float | None = None
-    size: int
-    subtree_size: int = 0
+M = TypeVar("M", bound=BaseModel)
 
 
 class ObjectSummary(BaseModel):
@@ -39,9 +36,54 @@ class ObjectSummary(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class _RawObjectRecord(BaseModel):
+    id: int
+    type: str
+    references: list[int]
+    value: str | int | float | None = None
+    size: int
+    subtree_size: int = 0
+    model_config = ConfigDict(extra="forbid")
+
+
+class ObjectRecord(BaseModel):
+    id: int
+    type: str
+    references: list[ObjectSummary]
+    referrers: list[ObjectSummary]
+    value: str | int | float | None = None
+    size: int
+    subtree_size: int = 0
+
+
+class _ObjectRecordNoValue(BaseModel):
+    id: int
+    type: str
+    references: list[int]
+    size: int
+    model_config = ConfigDict(extra="ignore")
+
+
+class _SizeIndexEntry(BaseModel):
+    size: int
+    obj_id: int
+
+    def _pack(self) -> bytes:
+        # Pack by size descending, then by obj_id ascending, so we can sort by size in LMDB
+        return struct.pack(">qQ", -self.size, self.obj_id)
+
+    @staticmethod
+    def _unpack(data: bytes) -> "_SizeIndexEntry":
+        size, obj_id = struct.unpack(">qQ", data)
+        return _SizeIndexEntry(size=-size, obj_id=obj_id)
+
+
 PRIMARY_DB = b"primary"
 REFERRERS_DB = b"referrers"
 TYPES_DB = b"types"
+TYPES_SIZE_INDEX_DB = b"types_size_index"
+TYPES_SUBTREE_SIZE_INDEX_DB = b"types_subtree_size_index"
+PAGE_SIZE = 1000  # Hardcode this for now
 
 
 def _pack_id(obj_id: int) -> bytes:
@@ -88,13 +130,19 @@ def txn() -> Transaction:
 class HeapDumpExplorer:
     def __init__(self, db_path="/tmp/heap_dump_db"):
         self._env = Environment(
-            db_path, map_size=10 * 1024 * 1024 * 1024, max_dbs=3
+            db_path, map_size=10 * 1024 * 1024 * 1024, max_dbs=5
         )  # 10 GB
         self._primary_db = self._env.open_db(PRIMARY_DB, integerkey=True, create=True)
         self._referrers_db = self._env.open_db(
             REFERRERS_DB, integerdup=True, create=True
         )
         self._types_db = self._env.open_db(TYPES_DB, dupsort=True, create=True)
+        self._types_size_index_db = self._env.open_db(
+            TYPES_SIZE_INDEX_DB, dupsort=True, create=True
+        )
+        self._types_subtree_size_index_db = self._env.open_db(
+            TYPES_SUBTREE_SIZE_INDEX_DB, dupsort=True, create=True
+        )
 
     def import_dump(self, dump_path="/tmp/dump.jsonl"):
         with open(dump_path, "rb") as f:
@@ -103,7 +151,7 @@ class HeapDumpExplorer:
     @tx_write
     def import_lines(self, lines: Iterable[bytes]):
         for line in lines:
-            record = ObjectRecord.model_validate_json(line)
+            record = _RawObjectRecord.model_validate_json(line)
             obj_id = record.id
             encoded_obj_id = _pack_id(obj_id)
 
@@ -123,118 +171,181 @@ class HeapDumpExplorer:
             )
 
         self._calculate_subtree_sizes()
-
-    @overload
-    def get_object(
-        self, obj_id, references: Literal["none"]
-    ) -> ObjectRecord[int] | None: ...
-
-    @overload
-    def get_object(
-        self, obj_id, references: Literal["ids"]
-    ) -> ObjectRecord[int] | None: ...
-
-    @overload
-    def get_object(
-        self, obj_id, references: Literal["summaries"]
-    ) -> ObjectRecord[ObjectSummary | None] | None: ...
+        self._build_size_indexes()
 
     @tx
-    def get_object(
-        self, obj_id, references: Literal["none", "ids", "summaries"]
-    ) -> ObjectRecord[int] | ObjectRecord[ObjectSummary | None] | None:
-        data = txn().get(_pack_id(obj_id), db=self._primary_db)
+    def get_object(self, obj_id: int) -> ObjectRecord | None:
+        data = self._load_and_validate(obj_id, _RawObjectRecord)
         if data is None:
             return None
-        data = ObjectRecord[int].model_validate_json(data)
-        if references == "none":
-            return data
 
         referrers = []
         cursor = txn().cursor(db=self._referrers_db)
         if cursor.set_key(_pack_id(obj_id)):
             for value in cursor.iternext_dup():
                 referrers.append(_unpack_id(value))
-        data.referrers = referrers
-        if references == "ids":
-            return data
 
-        return ObjectRecord[ObjectSummary | None](
+        return ObjectRecord(
             id=data.id,
             type=data.type,
             value=data.value,
             size=data.size,
-            references=[self.get_object_summary(ref_id) for ref_id in data.references],
-            referrers=[self.get_object_summary(ref_id) for ref_id in data.referrers],
+            references=self._get_summaries_for_ids(data.references),
+            referrers=self._get_summaries_for_ids(referrers),
         )
 
-    @tx
-    def iterate_all_objects(self) -> Iterable[ObjectRecord[int]]:
+    def _get_summaries_for_ids(self, ids: list[int]) -> list[ObjectSummary]:
+        summaries = []
+        for obj_id in ids:
+            summary = self._load_and_validate(obj_id, ObjectSummary)
+            if summary is not None:
+                summaries.append(summary)
+        return summaries
+
+    def _load_and_validate(self, id: int, model: type[M]) -> M | None:
+        data = txn().get(_pack_id(id), db=self._primary_db)
+        if data is None:
+            return None
+        return model.model_validate_json(data)
+
+    def _iterate_all_objects(self, model: type[M]) -> Iterable[M]:
         cursor = txn().cursor(db=self._primary_db)
         for value in cursor.iternext(keys=False, values=True):
             assert isinstance(value, bytes)
-            yield ObjectRecord[int].model_validate_json(value)
-
-    @tx
-    def get_object_summary(self, obj_id) -> ObjectSummary | None:
-        data = txn().get(_pack_id(obj_id), db=self._primary_db)
-        if data is None:
-            return None
-        return ObjectSummary.model_validate_json(data)
+            yield model.model_validate_json(value)
 
     @tx
     def get_type_counts(self) -> list[tuple[str, int]]:
         type_counts: Counter[str] = Counter()
         cursor = txn().cursor(db=self._types_db)
-        for key in cursor.iternext(keys=True, values=False):
+        for key in cursor.iternext_nodup(keys=True, values=False):
             assert isinstance(key, bytes)
-            type_counts[key.decode()] += 1
+            type_counts[key.decode()] += cursor.count()
         return type_counts.most_common()
 
     @tx
-    def get_objects_by_type(self, type_name: str) -> list[ObjectSummary]:
+    def get_count_for_type(self, type_name: str) -> int:
+        cursor = txn().cursor(db=self._types_db)
+        if cursor.set_key(type_name.encode()):
+            return cursor.count()
+        return 0
+
+    @tx
+    def get_page_count_for_type(self, type_name: str) -> int:
+        count = self.get_count_for_type(type_name)
+        return (count + PAGE_SIZE - 1) // PAGE_SIZE
+
+    @tx
+    def get_objects_by_type(
+        self, type_name: str, page: int | None = None
+    ) -> list[ObjectSummary]:
         objects: list[ObjectSummary] = []
         cursor = txn().cursor(db=self._types_db)
         if cursor.set_key(type_name.encode()):
-            for value in cursor.iternext_dup():
+            if page is not None:
+                for _ in range(page * PAGE_SIZE):
+                    # If this naive pagination proves too slow, we can build a separate index for pagination
+                    if not cursor.next_dup():
+                        return []
+            for i, value in enumerate(cursor.iternext_dup()):
+                if page is not None and i >= PAGE_SIZE:
+                    break
                 obj_id = _unpack_id(value)
-                summary = self.get_object_summary(obj_id)
+                summary = self._load_and_validate(obj_id, ObjectSummary)
                 if summary is not None:
                     objects.append(summary)
 
         return objects
 
     @tx
+    def get_objects_by_type_ordered_by_size(
+        self, type_name: str, subtree_size=False, page: int | None = None
+    ) -> list[ObjectSummary]:
+        objects: list[ObjectSummary] = []
+        index_db = (
+            self._types_subtree_size_index_db
+            if subtree_size
+            else self._types_size_index_db
+        )
+        cursor = txn().cursor(db=index_db)
+        if cursor.set_key(type_name.encode()):
+            if page is not None:
+                for _ in range(page * PAGE_SIZE):
+                    if not cursor.next_dup():
+                        return []
+            for i, value in enumerate(cursor.iternext_dup()):
+                if page is not None and i >= PAGE_SIZE:
+                    break
+                index_entry = _SizeIndexEntry._unpack(value)
+                obj_id = index_entry.obj_id
+                summary = self._load_and_validate(obj_id, ObjectSummary)
+                if summary is not None:
+                    objects.append(summary)
+
+        return objects
+
+    def _build_size_indexes(self):
+        # Build indexes for types by size and subtree size
+        t = txn()
+        for obj in self._iterate_all_objects(_RawObjectRecord):
+            size_index_entry = _SizeIndexEntry(size=obj.size, obj_id=obj.id)
+            t.put(
+                obj.type.encode(),
+                size_index_entry._pack(),
+                dupdata=True,
+                db=self._types_size_index_db,
+            )
+            subtree_size_index_entry = _SizeIndexEntry(
+                size=obj.subtree_size, obj_id=obj.id
+            )
+            t.put(
+                obj.type.encode(),
+                subtree_size_index_entry._pack(),
+                dupdata=True,
+                db=self._types_subtree_size_index_db,
+            )
+
     def _calculate_subtree_sizes(self):
         # Calculate subtree sizes using Tarjan
         t = txn()
 
         @dataclass(slots=True)
-        class StackEntry:
+        class BookkeepingEntry:
             index: int
             lowlink: int
             on_stack: bool
 
-        bookkeeping: dict[int, StackEntry] = {}
-        stack: list[tuple[int, int]] = []
+        @dataclass(slots=True)
+        class StackEntry:
+            obj_id: int
+            size: int
+
+        bookkeeping: dict[int, BookkeepingEntry] = {}
+        stack: list[StackEntry] = []
         index = 0
         scc_sizes: dict[int, int] = {}
         obj_id_to_scc: dict[int, int] = {}
+        known_module_ids: set[int] = set()
 
         def strongconnect(
-            obj: ObjectRecord[int],
-        ) -> set[int]:  # Returns set of SCCs that are children of this node
+            obj: _ObjectRecordNoValue,
+        ) -> Generator[
+            set[int], None, set[int]
+        ]:  # Returns set of SCCs that are children of this node
             nonlocal index
-            entry = StackEntry(index=index, lowlink=index, on_stack=True)
+            entry = BookkeepingEntry(index=index, lowlink=index, on_stack=True)
             bookkeeping[obj.id] = entry
-            stack.append((obj.id, obj.size))
+            stack.append(StackEntry(obj_id=obj.id, size=obj.size))
             index += 1
             child_sccs: set[int] = set()
 
             for ref_id in obj.references:
-                ref = self.get_object(ref_id, references="none")
+                # Don't include references from modules in the graph, since they create huge SCCs that aren't interesting
+                if ref_id in known_module_ids:
+                    continue
+                ref = self._load_and_validate(ref_id, _ObjectRecordNoValue)
                 if ref is None or ref.type == "module":
-                    # Don't include references from modules in the graph, since they create huge SCCs that aren't interesting
+                    known_module_ids.add(ref_id)
                     continue
                 bookkeeping_entry = bookkeeping.get(ref_id)
                 if bookkeeping_entry is None:
@@ -251,12 +362,12 @@ class HeapDumpExplorer:
                 scc_size = 0
                 scc_members = set()
                 while True:
-                    member_id, member_size = stack.pop()
-                    bookkeeping[member_id].on_stack = False
-                    scc_size += member_size
-                    scc_members.add(member_id)
-                    obj_id_to_scc[member_id] = entry.index
-                    if member_id == obj.id:
+                    member = stack.pop()
+                    bookkeeping[member.obj_id].on_stack = False
+                    scc_size += member.size
+                    scc_members.add(member.obj_id)
+                    obj_id_to_scc[member.obj_id] = entry.index
+                    if member.obj_id == obj.id:
                         break
                 scc_sizes[entry.index] = scc_size
 
@@ -264,9 +375,8 @@ class HeapDumpExplorer:
                     scc_sizes[child_scc] for child_scc in child_sccs
                 )
                 for member_id in scc_members:
-                    data = t.get(_pack_id(member_id), db=self._primary_db)
-                    assert data is not None
-                    record = ObjectRecord[int].model_validate_json(data)
+                    record = self._load_and_validate(member_id, _RawObjectRecord)
+                    assert record is not None
                     record.subtree_size = subtree_size
                     t.put(
                         _pack_id(member_id),
@@ -277,6 +387,6 @@ class HeapDumpExplorer:
                 return child_sccs.union({entry.index})
             return child_sccs
 
-        for obj in self.iterate_all_objects():
+        for obj in self._iterate_all_objects(_ObjectRecordNoValue):
             if obj.id not in bookkeeping:
                 run_with_long_stack(strongconnect(obj))

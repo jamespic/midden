@@ -7,6 +7,21 @@
 </head>
 <body>
     <h1>Instances of type {{ type_name }} in Heap Dump: {{ dump_name }}</h1>
+    <p><a href="{{ url_for('explore_dump', dump_name=dump_name) }}">Back to overview</a></p>
+    <p>
+        <form action="{{ url_for('explore_type', dump_name=dump_name, type_name=type_name) }}" method="get">
+            <a title="first page" href="{{ url_for('explore_type', dump_name=dump_name, type_name=type_name, page=1, sort=sort) }}">⏮️</a>
+            {% if page > 1 %}
+                <a title="previous page" href="{{ url_for('explore_type', dump_name=dump_name, type_name=type_name, page=page-1, sort=sort) }}">◀️</a>
+            {% endif %}
+            Page <input type="number" name="page" value="{{ page }}" min="1" max="{{ total_pages }}">
+                <input type="hidden" name="sort" value="{{ sort }}"> of {{ total_pages }}
+            {% if page < total_pages %}
+                <a title="next page" href="{{ url_for('explore_type', dump_name=dump_name, type_name=type_name, page=page+1, sort=sort) }}">▶️</a>
+            {% endif %}
+            <a title="last page" href="{{ url_for('explore_type', dump_name=dump_name, type_name=type_name, page=total_pages, sort=sort) }}">⏭️</a>
+        </form>
+    </p>
     {{ components.object_list(objects, dump_name, sortable=True) }}
 </body>
 </html>

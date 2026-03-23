@@ -5,7 +5,13 @@ explicit stack, but this involves breaking the function into multiple parts join
 Python's generators already do this FSM transformation for you, so you can write your function
 as a generator that yields whenever it would recurse, and then use this helper to run it without hitting the recursion limit."""
 
-def run_with_long_stack(gen):
+from collections.abc import Generator
+from typing import TypeVar, Any, cast
+
+_T = TypeVar("_T")
+
+
+def run_with_long_stack(gen: Generator[Any, Any, _T]) -> _T:
     stack = [gen]
     next_val = None
     next_exc = None
@@ -27,4 +33,4 @@ def run_with_long_stack(gen):
             next_exc = e
     if next_exc is not None:
         raise next_exc
-    return next_val
+    return cast(_T, next_val)

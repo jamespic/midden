@@ -1,7 +1,12 @@
 {% macro object_list(objects, dump_name, sortable=False) %}
 <ul><table>
     <tr>
-        <th>ID</th>
+        <th>{% if sortable %}
+                <a href="?sort=id">ID</a>
+            {% else %}
+                ID
+            {% endif %}
+        </th>
         <th>Type</th>
         <th>
             {% if sortable %}

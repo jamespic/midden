@@ -3,10 +3,22 @@
 The output is a JSONL file where each line is a JSON object representing an object in the heap,
 with its id, type, referers, references, and optionally its value (for simple types)."""
 
-from types import ModuleType, FunctionType
+from types import (
+    ModuleType,
+    FunctionType,
+    BuiltinFunctionType,
+    MethodType,
+    WrapperDescriptorType,
+    MethodWrapperType,
+    MethodDescriptorType,
+    ClassMethodDescriptorType,
+    GetSetDescriptorType,
+    MemberDescriptorType,
+)
 
 import gc
 import json
+import os
 import sys
 
 
@@ -67,14 +79,22 @@ def _dump_heap():
         else:
             return repr(obj)
 
+    def _get_prefix(obj):
+        """Get the module name or class name for an object, if possible."""
+        if module := getattr(obj, "__module__", None):
+            return f"{module}."
+        elif obj_class := getattr(obj, "__objclass__", None):
+            return f"{_get_qualname(obj_class)}."
+        else:
+            return repr(obj)
+
+    def _name_extractor(obj):
+        return _get_prefix(obj) + _get_qualname(obj)
+
     def _get_type_name(obj):
         """Get a friendly type name for an object."""
         t = type(obj)
-        module = getattr(t, "__module__", None)
-        qualname = _get_qualname(t)
-        if module and module != "builtins":
-            return f"{module}.{qualname}"
-        return qualname
+        return _name_extractor(t)
 
     _SENTINEL = object()
     _exclude_ids.add(id(_SENTINEL))
@@ -92,18 +112,6 @@ def _dump_heap():
     def _module_extractor(obj):
         return f"module {obj.__name__}"
 
-    def _function_extractor(obj):
-        return f"{_get_qualname(obj)} (function in module {obj.__module__})"
-
-    def _staticmethod_extractor(obj):
-        return f"{_get_qualname(obj)} (staticmethod in module {obj.__module__})"
-
-    def _classmethod_extractor(obj):
-        return f"{_get_qualname(obj)} (classmethod in module {obj.__module__})"
-
-    def _type_extractor(obj):
-        return f"{_get_qualname(obj)} (type in module {obj.__module__})"
-
     _value_extractors = {
         str: _string_extractor,
         bytes: _bytes_extractor,
@@ -113,14 +121,22 @@ def _dump_heap():
         bool: lambda x: x,
         type(None): lambda x: None,
         ModuleType: _module_extractor,
-        FunctionType: _function_extractor,
-        staticmethod: _staticmethod_extractor,
-        classmethod: _classmethod_extractor,
-        type: _type_extractor,
+        FunctionType: _name_extractor,
+        BuiltinFunctionType: _name_extractor,
+        MethodType: _name_extractor,
+        staticmethod: _name_extractor,
+        classmethod: _name_extractor,
+        WrapperDescriptorType: _name_extractor,
+        MethodWrapperType: _name_extractor,
+        MethodDescriptorType: _name_extractor,
+        ClassMethodDescriptorType: _name_extractor,
+        GetSetDescriptorType: _name_extractor,
+        MemberDescriptorType: _name_extractor,
+        type: _name_extractor,
     }
 
     try:
-        with open("/tmp/dump.jsonl", "w") as f:
+        with open("/tmp/dump.jsonl.partial", "w") as f:
             _exclude_ids.add(id(f))
 
             def dump_object(obj):
@@ -139,7 +155,9 @@ def _dump_heap():
                     "id": obj_id,
                     "type": type_name,
                     "references": references,
-                    "size": sys.getsizeof(obj, 0),  # Get size of object, excluding referents
+                    "size": sys.getsizeof(
+                        obj, 0
+                    ),  # Get size of object, excluding referents
                     # Don't get referrers - it's too slow. We'll index it offline later.
                 }
 
@@ -163,8 +181,10 @@ def _dump_heap():
             for obj in extra_objects:
                 dump_object(obj)
 
+        os.rename("/tmp/dump.jsonl.partial", "/tmp/dump.jsonl")
+
     except Exception as e:
         sys.stderr.write(f"dump_heap error: {e}\n")
 
 
-_dump_heap()
+# _dump_heap() # This line is meant to be replaced by the injector with a call to _dump_heap() after injecting the code into the target process.
