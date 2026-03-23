@@ -169,6 +169,13 @@ class HeapDumpExplorer:
         )
 
     @tx
+    def iterate_all_objects(self) -> Iterable[ObjectRecord[int]]:
+        cursor = txn().cursor(db=self._primary_db)
+        for value in cursor.iternext(keys=False, values=True):
+            assert isinstance(value, bytes)
+            yield ObjectRecord[int].model_validate_json(value)
+
+    @tx
     def get_object_summary(self, obj_id) -> ObjectSummary | None:
         data = txn().get(_pack_id(obj_id), db=self._primary_db)
         if data is None:
@@ -209,26 +216,29 @@ class HeapDumpExplorer:
             on_stack: bool
 
         bookkeeping: dict[int, StackEntry] = {}
-        stack: list[int] = []
+        stack: list[tuple[int, int]] = []
         index = 0
         scc_sizes: dict[int, int] = {}
         obj_id_to_scc: dict[int, int] = {}
 
         def strongconnect(
-            obj_id: int,
+            obj: ObjectRecord[int],
         ) -> set[int]:  # Returns set of SCCs that are children of this node
             nonlocal index
             entry = StackEntry(index=index, lowlink=index, on_stack=True)
-            bookkeeping[obj_id] = entry
-            stack.append(obj_id)
+            bookkeeping[obj.id] = entry
+            stack.append((obj.id, obj.size))
             index += 1
             child_sccs: set[int] = set()
 
-            obj = self.get_object(obj_id, references="ids")
             for ref_id in obj.references:
+                ref = self.get_object(ref_id, references="none")
+                if ref is None or ref.type == "module":
+                    # Don't include references from modules in the graph, since they create huge SCCs that aren't interesting
+                    continue
                 bookkeeping_entry = bookkeeping.get(ref_id)
                 if bookkeeping_entry is None:
-                    child_sccs.update((yield strongconnect(ref_id)))
+                    child_sccs.update((yield strongconnect(ref)))
                     entry.lowlink = min(entry.lowlink, bookkeeping[ref_id].lowlink)
                 elif bookkeeping_entry.on_stack:
                     # Use lowlink variant, so lowlink will point to the root of the SCC, not just the first node we saw
@@ -241,12 +251,12 @@ class HeapDumpExplorer:
                 scc_size = 0
                 scc_members = set()
                 while True:
-                    member_id = stack.pop()
+                    member_id, member_size = stack.pop()
                     bookkeeping[member_id].on_stack = False
-                    scc_size += self.get_object_summary(member_id).size
+                    scc_size += member_size
                     scc_members.add(member_id)
                     obj_id_to_scc[member_id] = entry.index
-                    if member_id == obj_id:
+                    if member_id == obj.id:
                         break
                 scc_sizes[entry.index] = scc_size
 
@@ -267,8 +277,6 @@ class HeapDumpExplorer:
                 return child_sccs.union({entry.index})
             return child_sccs
 
-        cursor = t.cursor(db=self._primary_db)
-        for key in cursor.iternext(keys=True, values=False):
-            obj_id = _unpack_id(key)
-            if obj_id not in bookkeeping:
-                run_with_long_stack(strongconnect(obj_id))
+        for obj in self.iterate_all_objects():
+            if obj.id not in bookkeeping:
+                run_with_long_stack(strongconnect(obj))
