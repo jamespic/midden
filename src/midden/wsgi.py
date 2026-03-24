@@ -35,6 +35,10 @@ def create_app():
     def upload_dump():
         dump_name = request.form["dump_name"]
         dump_file = request.files["dump_file"]
+        if dump_name in loaded_dumps:
+            return f"Dump with name '{dump_name}' already exists", 409
+        if "/" in dump_name or "\\" in dump_name:
+            return "Invalid dump name", 400
         explorer = HeapDumpExplorer(f"{DUMPS_DIR}/{dump_name}.lmdb")
         explorer.import_lines(dump_file)
         loaded_dumps[dump_name] = explorer
@@ -88,3 +92,10 @@ def create_app():
         return render_template("object.html", dump_name=dump_name, obj=obj)
 
     return app
+
+def main():
+    app = create_app()
+    app.run()
+
+if __name__ == "__main__":
+    main()

@@ -86,7 +86,7 @@ def _dump_heap():
         elif obj_class := getattr(obj, "__objclass__", None):
             return f"{_get_qualname(obj_class)}."
         else:
-            return repr(obj)
+            return ""
 
     def _name_extractor(obj):
         return _get_prefix(obj) + _get_qualname(obj)

@@ -2,7 +2,7 @@
 It uses LMDB to store the data on disk and provides methods for querying objects, their types, and their relationships.
 """
 
-from heap_analysis.long_stack import run_with_long_stack
+from .long_stack import run_with_long_stack
 from dataclasses import dataclass
 
 import struct
@@ -190,6 +190,7 @@ class HeapDumpExplorer:
             type=data.type,
             value=data.value,
             size=data.size,
+            subtree_size=data.subtree_size,
             references=self._get_summaries_for_ids(data.references),
             referrers=self._get_summaries_for_ids(referrers),
         )
@@ -344,7 +345,7 @@ class HeapDumpExplorer:
                 if ref_id in known_module_ids:
                     continue
                 ref = self._load_and_validate(ref_id, _ObjectRecordNoValue)
-                if ref is None or ref.type == "module":
+                if ref is None or ref.type == "builtins.module":
                     known_module_ids.add(ref_id)
                     continue
                 bookkeeping_entry = bookkeeping.get(ref_id)

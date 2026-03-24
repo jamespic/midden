@@ -13,11 +13,11 @@
         <dd><a href="{{ url_for('explore_type', type_name=obj.type, dump_name=dump_name) }}">{{ obj.type }}</a></dd>
         <dt>ID:</dt>
         <dd>{{ obj.id }}</dd>
-        {% if obj.value is not none %}
         <dt>Size:</dt>
         <dd>{{ obj.size }} bytes</dd>
         <dt>Subtree Size:</dt>
         <dd>{{ obj.subtree_size }} bytes</dd>
+        {% if obj.value is not none %}
         <dt>Value:</dt>
         <dd>{{ obj.value }}</dd>
         {% endif %}

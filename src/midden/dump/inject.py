@@ -1,8 +1,8 @@
 import time
-import importlib.resources as res
 import tempfile
 from subprocess import Popen, PIPE
 import os
+import pathlib
 
 try:
     from sys import remote_exec
@@ -25,9 +25,8 @@ def dump_heap_from_pid(pid, output_file=DEFAULT_DUMP_FILE):
 
 
 def _build_dump_heap_code(output_file):
-    with res.open_text("heap_analysis", "dump_heap.py") as f:
-        code = f.read()
-
+    res = pathlib.Path(__file__).parent / "dump_heap.py"
+    code = res.read_text()
     return code.replace(DEFAULT_DUMP_FILE, output_file).replace(
         "# _dump_heap()", "_dump_heap()"
     )
@@ -112,7 +111,7 @@ def _should_use_namespace(pid):
         return False
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -127,3 +126,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     dump_heap_from_pid(args.pid, args.output_file)
+
+if __name__ == "__main__":
+    main()
