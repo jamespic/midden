@@ -8,6 +8,22 @@
 <body>
     <h1>{{ obj.type }} instance {{ obj.id }} in Heap Dump: {{ dump_name }}</h1>
     <p><a href="{{ url_for('explore_dump', dump_name=dump_name) }}">Back to overview</a></p>
+    {% if current_from_id == obj.id %}
+        <p><strong>This object will be used as the starting point if you start a path search.</strong></p>
+    {% else %}
+        <form action="{{ url_for('set_path_finding_endpoint', dump_name=dump_name) }}" method="post">
+            <input type="hidden" name="from_id" value="{{ obj.id }}">
+            <button type="submit">Can you find a path from here to {% if current_to_id %}object {{ current_to_id }}{% else %}...{% endif %}?</button>
+        </form>
+    {% endif %}
+    {% if current_to_id == obj.id %}
+        <p><strong>This object will be used as the ending point if you start a path search.</strong></p>
+    {% else %}
+        <form action="{{ url_for('set_path_finding_endpoint', dump_name=dump_name) }}" method="post">
+            <input type="hidden" name="to_id" value="{{ obj.id }}">
+            <button type="submit">Can you find a path from {% if current_from_id %}object {{ current_from_id }}{% else %}...{% endif %} to here?</button>
+        </form>
+    {% endif %}
     <dl>
         <dt>Type:</dt>
         <dd><a href="{{ url_for('explore_type', type_name=obj.type, dump_name=dump_name) }}">{{ obj.type }}</a></dd>

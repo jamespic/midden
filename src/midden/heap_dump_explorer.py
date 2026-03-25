@@ -296,8 +296,9 @@ class HeapDumpExplorer:
 
     @tx
     def find_path_between_objects(
-        self, start_id: int, end_id: int
+        self, start_id: int, end_id: int, avoid_ids: set[int] | None = None
     ) -> list[ObjectSummary] | None:
+
         queue = deque([start_id])
         predecessors = {start_id: None}  # Doubles as a visited set
         start_sketch = self._get_scc_sketch(start_id)
@@ -330,6 +331,8 @@ class HeapDumpExplorer:
                 continue
             assert object_record is not None
             for ref_id in object_record.references:
+                if avoid_ids is not None and ref_id in avoid_ids:
+                    continue
                 if ref_id not in predecessors:
                     predecessors[ref_id] = current_id
                     queue.append(ref_id)

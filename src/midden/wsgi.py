@@ -4,7 +4,7 @@ from werkzeug.exceptions import NotFound
 from ntpath import basename
 import os
 
-from flask import Flask, request, redirect, url_for, render_template
+from flask import Flask, request, redirect, url_for, render_template, session
 from .heap_dump_explorer import HeapDumpExplorer
 
 DUMPS_DIR = os.getenv("DUMPS_DIR", "/tmp/dumps")
@@ -87,33 +87,66 @@ def create_app():
     def explore_object(dump_name, obj_id):
         explorer = get_dump(dump_name)
         obj = explorer.get_object(obj_id)
+        current_from_id = session.get(f"path_finding_from_id:{dump_name}")
+        current_to_id = session.get(f"path_finding_to_id:{dump_name}")
         if not obj:
             raise NotFound(f"Object with ID {obj_id} not found in dump '{dump_name}'")
-        return render_template("object.html", dump_name=dump_name, obj=obj)
-    
+        return render_template(
+            "object.html",
+            dump_name=dump_name,
+            obj=obj,
+            current_from_id=current_from_id,
+            current_to_id=current_to_id,
+        )
+
+    @app.route("/explore/<dump_name>/set_path_finding_endpoint", methods=["POST"])
+    def set_path_finding_endpoint(dump_name):
+        from_id = request.form.get(
+            "from_id", session.get(f"path_finding_from_id:{dump_name}"), type=int
+        )
+        to_id = request.form.get(
+            "to_id", session.get(f"path_finding_to_id:{dump_name}"), type=int
+        )
+        if from_id is not None and to_id is not None:
+            del session[f"path_finding_from_id:{dump_name}"]
+            del session[f"path_finding_to_id:{dump_name}"]
+            return redirect(
+                url_for("find_path", dump_name=dump_name, from_id=from_id, to_id=to_id)
+            )
+        else:
+            session[f"path_finding_from_id:{dump_name}"] = from_id
+            session[f"path_finding_to_id:{dump_name}"] = to_id
+
+            return redirect(
+                url_for("explore_object", dump_name=dump_name, obj_id=from_id or to_id)
+            )
+
     @app.route("/explore/<dump_name>/find_path")
     def find_path(dump_name):
         explorer = get_dump(dump_name)
         from_id = request.args.get("from_id", type=int)
         to_id = request.args.get("to_id", type=int)
+        avoid_ids = set(request.args.getlist("avoid_id", type=int))
         if from_id is None or to_id is None:
             return "Missing from_id or to_id query parameters", 400
-        path = explorer.find_path_between_objects(from_id, to_id)
-        if path is None:
-            return f"No path found from object {from_id} to object {to_id}", 404
+        path = explorer.find_path_between_objects(from_id, to_id, avoid_ids=avoid_ids)
         return render_template(
             "path.html",
             dump_name=dump_name,
             from_id=from_id,
             to_id=to_id,
             path=path,
+            avoid_ids=list(avoid_ids),
         )
 
     return app
 
+
 def main():
     app = create_app()
+    app.secret_key = os.urandom(16)  # Needed for session management
     app.run()
+
 
 if __name__ == "__main__":
     main()

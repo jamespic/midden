@@ -1,5 +1,5 @@
 {% macro object_list(objects, dump_name, sortable=False) %}
-<ul><table>
+<table>
     <tr>
         <th>{% if sortable %}
                 <a href="?sort=id">ID</a>
@@ -31,6 +31,5 @@
             <td>{{ obj.subtree_size }} bytes</td>
             <td>{% if obj.value is not none %}{{ obj.value }}{% endif %}</td></tr>
     {% endfor %}
-    </table>
-</ul>
+</table>
 {% endmacro %}

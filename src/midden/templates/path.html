@@ -8,6 +8,39 @@
 <body>
     <h1>Path from {{ from_id }} to {{ to_id }} in Heap Dump: {{ dump_name }}</h1>
     <p><a href="{{ url_for('explore_dump', dump_name=dump_name) }}">Back to overview</a></p>
-    {{ components.object_list(path, dump_name) }}
+    {% if path is none %}
+        <p><strong>No path found.</strong></p>
+    {% else %}
+        <table>
+    <tr>
+        <th>ID</th>
+        <th>Type</th>
+        <th>Size</th>
+        <th>Subtree Size</th>
+        <th>Value</th>
+        <th>Avoid</th>
+    </tr>
+
+    {% for obj in path %}
+        <tr>
+            <td><a href="{{ url_for('explore_object', dump_name=dump_name, obj_id=obj.id) }}">{{ obj.id }}</a></td>
+            <td>{{ obj.type }}</td>
+            <td>{{ obj.size }} bytes</td>
+            <td>{{ obj.subtree_size }} bytes</td>
+            <td>{% if obj.value is not none %}{{ obj.value }}{% endif %}</td>
+            <td>
+                {% if obj.id not in avoid_ids %}
+                    <a
+                        href="{{ url_for('find_path', dump_name=dump_name, from_id=from_id, to_id=to_id, avoid_id=avoid_ids + [obj.id]) }}"
+                        title="Find a new path that avoids this object">
+                        Avoid
+                    </a>
+                {% endif %}
+            </td>
+        </tr>
+    {% endfor %}
+</table>
+    {% endif %}
+    
 </body>
 </html>
