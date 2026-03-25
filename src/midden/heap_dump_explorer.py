@@ -423,6 +423,7 @@ class HeapDumpExplorer:
                 # Found an SCC root, pop the stack and calculate size
                 scc = entry.index
                 reachable_sccs.add(scc)
+                reachable_sccs_sketch.add(scc)
                 scc_size = 0
                 scc_members = set()
                 while True:
@@ -435,9 +436,7 @@ class HeapDumpExplorer:
                         break
                 scc_sizes[scc] = scc_size
 
-                subtree_size = scc_size + sum(
-                    scc_sizes[child_scc] for child_scc in reachable_sccs
-                )
+                subtree_size = sum(scc_sizes[child_scc] for child_scc in reachable_sccs)
                 for member_id in scc_members:
                     record = self._load_and_validate(member_id, _RawObjectRecord)
                     assert record is not None
