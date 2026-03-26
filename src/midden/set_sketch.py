@@ -21,30 +21,27 @@ class SetSketch:
     Args:
         num_hashes: Number of independent hash functions (k). Higher values
             reduce false positive rate but increase sketch size. Each hash
-            uses 8 bytes, so sketch size = 8 * num_hashes bytes.
+            uses 4 bytes, so sketch size = 4 * num_hashes bytes.
         from_bytes: Optional bytes to initialize the sketch from. num_hashes is ignored
     """
 
     def __init__(self, num_hashes: int = 8, from_bytes: bytes | None = None):
-        self.max_hash = (1 << 64) - 1
+        self.max_hash = (1 << 32) - 1
         # Initialize all registers to max value (empty set)
         if from_bytes is not None:
-            self._registers = array("Q")
+            self._registers = array("L")
             self._registers.frombytes(from_bytes)
             self.num_hashes = len(self._registers)
         else:
             self.num_hashes = num_hashes
-            self._registers: array = array("Q", [self.max_hash] * num_hashes)
+            self._registers: array = array("L", [self.max_hash] * num_hashes)
 
     def _hash(self, item: bytes, i: int) -> int:
         """Compute the i-th hash function on the given item.
 
         Uses xxHash with different seeds to simulate independent hash functions.
         """
-        h = xxhash.xxh64(seed=i)
-        h.update(item)
-        # Take first 8 bytes as a 64-bit unsigned integer
-        return h.intdigest()
+        return xxhash.xxh32_intdigest(item, seed=i)
 
     def _convert_item_to_bytes(self, item) -> bytes:
         """Convert an item to bytes for hashing."""
@@ -53,7 +50,7 @@ class SetSketch:
         elif isinstance(item, str):
             return item.encode("utf-8")
         else:
-            return repr(item).encode("utf-8")
+            return str(item).encode("utf-8")
 
     def add(self, item) -> "SetSketch":
         """Add an item to the sketch.

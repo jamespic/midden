@@ -139,12 +139,14 @@ def create_app():
             avoid_ids=list(avoid_ids),
         )
 
+    app.secret_key = os.urandom(
+        16
+    )  # Uses embedded database, so sharing keys across instances is pointless
     return app
 
 
 def main():
     app = create_app()
-    app.secret_key = os.urandom(16)  # Needed for session management
     app.run()
 
 

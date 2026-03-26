@@ -399,7 +399,6 @@ class HeapDumpExplorer:
             stack.append(StackEntry(obj_id=obj.id, size=obj.size))
             index += 1
             reachable_sccs: set[int] = set()
-            reachable_sccs_sketch = SetSketch()
 
             for ref_id in obj.references:
                 # Don't include references from modules in the graph, since they create huge SCCs that aren't interesting
@@ -413,20 +412,18 @@ class HeapDumpExplorer:
                 if bookkeeping_entry is None:
                     child_sccs = yield strongconnect(ref)
                     reachable_sccs.update(child_sccs)
-                    reachable_sccs_sketch.add_all(child_sccs)
                     entry.lowlink = min(entry.lowlink, bookkeeping[ref_id].lowlink)
                 elif bookkeeping_entry.on_stack:
                     # Use lowlink variant, so lowlink will point to the root of the SCC, not just the first node we saw
                     entry.lowlink = min(entry.lowlink, bookkeeping_entry.index)
                 else:
                     reachable_sccs.add(obj_id_to_scc[ref_id])
-                    reachable_sccs_sketch.add(obj_id_to_scc[ref_id])
 
             if entry.index == entry.lowlink:
                 # Found an SCC root, pop the stack and calculate size
                 scc = entry.index
                 reachable_sccs.add(scc)
-                reachable_sccs_sketch.add(scc)
+                reachable_sccs_sketch = SetSketch().add_all(reachable_sccs)
                 scc_size = 0
                 scc_members = set()
                 while True:
