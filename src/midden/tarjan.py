@@ -68,12 +68,14 @@ class GraphSCCVisitor(Generic[NodeT, NodeIdT, NodeAccT, SCCAccT]):
         raise NotImplementedError
 
     def emit_result(self, node_id: NodeIdT, scc_acc: SCCAccT):
-        """Override this to do something with the result for each node after processing. node_id is the ID of the node, and scc_acc is the accumulated value for its SCC."""
+        """Override this to do something with the result for each node after processing.
+        node_id is the ID of the node, and scc_acc is the accumulated value for its SCC."""
         raise NotImplementedError
 
 
 def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> None:
-    """Run Tarjan's algorithm. For each SCC, visitor.emit_result will be called for each member of the SCC with the accumulated value for that SCC."""
+    """Run Tarjan's algorithm. For each SCC, visitor.emit_result will be called for each
+    member of the SCC with the accumulated value for that SCC."""
 
     bookkeeping: dict[NodeIdT, _BookkeepingEntry] = {}
     stack: list[_StackEntry[NodeIdT, NodeAccT]] = []
