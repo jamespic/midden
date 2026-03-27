@@ -1,3 +1,4 @@
+from enum import Enum
 from midden.long_stack import run_with_long_stack
 from collections.abc import Generator, Callable
 from typing import TypeVar, Generic, Iterable
@@ -28,7 +29,11 @@ class _NodeInfo(Generic[NodeIdT, NodeAccT]):
     acc: NodeAccT
 
 
-_EMPTY_SENTINEL = object()
+class _EmptySentinel(Enum):
+    INSTANCE = 0
+
+
+_EMPTY_SENTINEL = _EmptySentinel.INSTANCE
 
 
 class GraphSCCVisitor(Generic[NodeT, NodeIdT, NodeAccT, SCCAccT]):
@@ -81,6 +86,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
     stack: list[_StackEntry[NodeIdT, NodeAccT]] = []
     index = 0
     scc_accs: dict[int, SCCAccT] = {}
+    scc_to_child_sccs: dict[int, set[int]] = {}
 
     def strongconnect(
         obj: NodeT,
@@ -109,13 +115,14 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
                 # We use lowlink to hold SCC ids for nodes that have already been fully processed,
                 # since we won't be visiting them again and we need some way to identify
                 # which SCC they belong to when we accumulate results for parent SCCs
-                reachable_sccs.add(bookkeeping[successor_id].lowlink)
+                linked_scc = bookkeeping[successor_id].lowlink
+                reachable_sccs.update(scc_to_child_sccs[linked_scc])
 
         if entry.index == entry.lowlink:
             # Found an SCC root, pop the stack and calculate size
             scc = entry.index
 
-            acc = _EMPTY_SENTINEL
+            acc: NodeAccT | _EmptySentinel = _EMPTY_SENTINEL
             scc_members: set[NodeIdT] = set()
             while True:
                 member = stack.pop()
@@ -131,16 +138,18 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
 
                 if member.id == obj_id:
                     break
-            acc = visitor.accumulate(
+            assert acc is not _EMPTY_SENTINEL
+            scc_acc = visitor.accumulate(
                 acc,
                 scc,
                 ((child_scc, scc_accs[child_scc]) for child_scc in reachable_sccs),
             )
-            scc_accs[scc] = acc
+            scc_accs[scc] = scc_acc
 
             for member_id in scc_members:
-                visitor.emit_result(member_id, acc)
+                visitor.emit_result(member_id, scc_acc)
             reachable_sccs.add(scc)
+            scc_to_child_sccs[scc] = reachable_sccs
 
         return reachable_sccs
 
