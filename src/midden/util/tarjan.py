@@ -1,3 +1,4 @@
+from .persistent_bitset import PersistentBitSet
 from enum import Enum
 from midden.util.long_stack import run_with_long_stack
 from collections.abc import Generator, Callable
@@ -88,12 +89,13 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
     index = 0
     next_scc_index = 0
     scc_accs: dict[int, SCCAccT] = {}
-    scc_to_child_sccs: dict[int, set[int]] = {}
+    scc_to_child_sccs: dict[int, PersistentBitSet] = {}
+    # scc_set_memoizer = Memoizer[PersistentBitSet]()
 
     def strongconnect(
         obj: NodeT,
     ) -> Generator[
-        set[int], None, set[int]
+        PersistentBitSet, None, PersistentBitSet
     ]:  # Returns set of SCCs that are children of this node
         nonlocal index, next_scc_index
         obj_id = visitor.get_node_id(obj)
@@ -101,7 +103,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
         bookkeeping[obj_id] = entry
         stack.append(_StackEntry(id=obj_id, acc=visitor.get_node_acc(obj)))
         index += 1
-        reachable_sccs: set[int] = set()
+        reachable_sccs: PersistentBitSet = PersistentBitSet.empty()
 
         for successor in visitor.get_successors(obj):
             # Don't include references from modules in the graph, since they create huge SCCs that aren't interesting
@@ -109,14 +111,14 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
             bookkeeping_entry = bookkeeping.get(successor_id)
             if bookkeeping_entry is None:
                 child_sccs = yield strongconnect(successor)
-                reachable_sccs.update(child_sccs)
+                reachable_sccs = reachable_sccs.union(child_sccs)
                 entry.lowlink = min(entry.lowlink, bookkeeping[successor_id].lowlink)
             elif bookkeeping_entry.on_stack:
                 entry.lowlink = min(entry.lowlink, bookkeeping_entry.index)
             else:
                 linked_scc = bookkeeping[successor_id].scc
                 assert linked_scc is not None
-                reachable_sccs.update(scc_to_child_sccs[linked_scc])
+                reachable_sccs = reachable_sccs.union(scc_to_child_sccs[linked_scc])
 
         if entry.index == entry.lowlink:
             # Found an SCC root, pop the stack and calculate size
@@ -149,7 +151,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
 
             for member_id in scc_members:
                 visitor.emit_result(member_id, scc_acc)
-            reachable_sccs.add(scc)
+            reachable_sccs = reachable_sccs.add(scc)
             scc_to_child_sccs[scc] = reachable_sccs
 
         return reachable_sccs
