@@ -21,6 +21,9 @@ import json
 import os
 import sys
 
+# Max length for string representations of values
+_max_value_len = 1000
+
 
 def _dump_heap():
     # Get all objects tracked by gc
@@ -28,29 +31,26 @@ def _dump_heap():
     print(f"Found {len(all_objects)} objects from gc.get_objects()", file=sys.stderr)
     extra_objects = []
     object_ids_tracked = set(id(obj) for obj in all_objects)
-    _value_types = (str, bytes, int, float, complex, bool, type(None))
 
     # Collect ids of our own data structures so we can exclude them
-    _exclude_ids = set(
-        [id(all_objects), id(extra_objects), id(object_ids_tracked), id(_value_types)]
+    exclude_ids = set(
+        [id(all_objects), id(extra_objects), id(object_ids_tracked), id(_dump_heap)]
     )
-
-    # Max length for string representations of values
-    _max_value_len = 1000
+    exclude_ids.add(id(exclude_ids))  # Don't forget to exclude the set of excluded ids itself!
 
     def _maybe_add_ref(ref_obj, refs):
         ref_id = id(ref_obj)
-        if ref_id not in _exclude_ids:
+        if ref_id not in exclude_ids:
             refs.append(ref_id)
             if ref_id not in object_ids_tracked:
                 extra_objects.append(ref_obj)
                 object_ids_tracked.add(ref_id)
+    exclude_ids.add(id(_maybe_add_ref))
 
     def _get_all_references(obj):
         """Get references from an object, including non-gc-tracked immutables."""
         refs = []
-        refs_set_id = id(refs)
-        _exclude_ids.add(refs_set_id)
+        exclude_ids.add(id(refs))
 
         obj_type = type(obj)
         if obj_type is dict:
@@ -64,86 +64,22 @@ def _dump_heap():
             # Fall back to gc.get_referents for other types,
             # which catches __dict__, slots, etc.
             gc_refs = gc.get_referents(obj)
-            _exclude_ids.add(id(gc_refs))
+            exclude_ids.add(id(gc_refs))
             for r in gc_refs:
                 _maybe_add_ref(r, refs)
 
         return refs
-
-    def _get_qualname(obj):
-        """Get a qualified name for an object, if possible."""
-        if qualname := getattr(obj, "__qualname__", None):
-            return qualname
-        elif name := getattr(obj, "__name__", None):
-            return name
-        else:
-            return repr(obj)
-
-    def _get_prefix(obj):
-        """Get the module name or class name for an object, if possible."""
-        if module := getattr(obj, "__module__", None):
-            return f"{module}."
-        elif obj_class := getattr(obj, "__objclass__", None):
-            return f"{_get_qualname(obj_class)}."
-        else:
-            return ""
-
-    def _name_extractor(obj):
-        return _get_prefix(obj) + _get_qualname(obj)
-
-    def _get_type_name(obj):
-        """Get a friendly type name for an object."""
-        t = type(obj)
-        return _name_extractor(t)
-
-    _SENTINEL = object()
-    _exclude_ids.add(id(_SENTINEL))
-
-    def _string_extractor(obj):
-        if len(obj) > _max_value_len:
-            return obj[:_max_value_len] + "...<truncated>"
-        return obj
-
-    def _bytes_extractor(obj):
-        if len(obj) > _max_value_len:
-            return repr(obj[:_max_value_len]) + "...<truncated>"
-        return repr(obj)
-
-    def _module_extractor(obj):
-        return f"module {obj.__name__}"
-
-    _value_extractors = {
-        str: _string_extractor,
-        bytes: _bytes_extractor,
-        int: lambda x: x,
-        float: lambda x: x,
-        complex: str,
-        bool: lambda x: x,
-        type(None): lambda x: None,
-        ModuleType: _module_extractor,
-        FunctionType: _name_extractor,
-        BuiltinFunctionType: _name_extractor,
-        MethodType: _name_extractor,
-        staticmethod: _name_extractor,
-        classmethod: _name_extractor,
-        WrapperDescriptorType: _name_extractor,
-        MethodWrapperType: _name_extractor,
-        MethodDescriptorType: _name_extractor,
-        ClassMethodDescriptorType: _name_extractor,
-        GetSetDescriptorType: _name_extractor,
-        MemberDescriptorType: _name_extractor,
-        type: _name_extractor,
-    }
+    exclude_ids.add(id(_get_all_references))
 
     try:
         with open("/tmp/dump.jsonl.partial", "w") as f:
-            _exclude_ids.add(id(f))
+            exclude_ids.add(id(f))
 
             def dump_object(obj):
                 obj_id = id(obj)
 
                 # Skip our own bookkeeping objects
-                if obj_id in _exclude_ids:
+                if obj_id in exclude_ids:
                     return
 
                 # Get references (including non-gc-tracked children)
@@ -168,13 +104,14 @@ def _dump_heap():
                     except Exception as e:
                         record["value"] = f"<error extracting value: {e}>"
 
-                _exclude_ids.add(id(record))
-                _exclude_ids.add(id(record.get("references")))
+                exclude_ids.add(id(record))
+                exclude_ids.add(id(record.get("references")))
 
                 line = json.dumps(record, default=str)
-                _exclude_ids.add(id(line))
+                exclude_ids.add(id(line))
                 f.write(line)
                 f.write("\n")
+            exclude_ids.add(id(dump_object))
 
             for obj in all_objects:
                 dump_object(obj)
@@ -185,6 +122,68 @@ def _dump_heap():
 
     except Exception as e:
         sys.stderr.write(f"dump_heap error: {e}\n")
+
+def _get_qualname(obj):
+    """Get a qualified name for an object, if possible."""
+    if qualname := getattr(obj, "__qualname__", None):
+        return qualname
+    elif name := getattr(obj, "__name__", None):
+        return name
+    else:
+        return repr(obj)
+
+def _get_prefix(obj):
+    """Get the module name or class name for an object, if possible."""
+    if module := getattr(obj, "__module__", None):
+        return f"{module}."
+    elif obj_class := getattr(obj, "__objclass__", None):
+        return f"{_get_qualname(obj_class)}."
+    else:
+        return ""
+
+def _name_extractor(obj):
+    return _get_prefix(obj) + _get_qualname(obj)
+
+def _get_type_name(obj):
+    """Get a friendly type name for an object."""
+    t = type(obj)
+    return _name_extractor(t)
+
+def _string_extractor(obj):
+    if len(obj) > _max_value_len:
+        return obj[:_max_value_len] + "...<truncated>"
+    return obj
+
+def _bytes_extractor(obj):
+    if len(obj) > _max_value_len:
+        return repr(obj[:_max_value_len]) + "...<truncated>"
+    return repr(obj)
+
+def _module_extractor(obj):
+    return f"module {obj.__name__}"
+
+_value_extractors = {
+    str: _string_extractor,
+    bytes: _bytes_extractor,
+    int: lambda x: x,
+    float: lambda x: x,
+    complex: str,
+    bool: lambda x: x,
+    type(None): lambda x: None,
+    ModuleType: _module_extractor,
+    FunctionType: _name_extractor,
+    BuiltinFunctionType: _name_extractor,
+    MethodType: _name_extractor,
+    staticmethod: _name_extractor,
+    classmethod: _name_extractor,
+    WrapperDescriptorType: _name_extractor,
+    MethodWrapperType: _name_extractor,
+    MethodDescriptorType: _name_extractor,
+    ClassMethodDescriptorType: _name_extractor,
+    GetSetDescriptorType: _name_extractor,
+    MemberDescriptorType: _name_extractor,
+    type: _name_extractor,
+}
 
 
 # _dump_heap() # This line is meant to be replaced by the injector with a call to _dump_heap() after injecting the code into the target process.

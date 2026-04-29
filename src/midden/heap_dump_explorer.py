@@ -9,7 +9,7 @@ from midden.set_sketch import SetSketch
 from dataclasses import dataclass
 
 import struct
-from collections import Counter, deque
+from collections import deque
 from lmdb import Environment, Transaction, _Database
 from threading import local
 from functools import wraps
@@ -31,6 +31,7 @@ M = TypeVar("M", bound=BaseModel)
 
 class ObjectSummary(BaseModel):
     """A summary of an object in the heap, for lightweight display and reference."""
+
     id: int
     type: str
     value: str | int | float | None = None
@@ -41,6 +42,7 @@ class ObjectSummary(BaseModel):
 
 class _RawObjectRecord(BaseModel):
     """Raw object record as imported from the heap dump, before reference resolution."""
+
     id: int
     type: str
     references: list[int]
@@ -52,6 +54,7 @@ class _RawObjectRecord(BaseModel):
 
 class ObjectRecord(BaseModel):
     """Full object record with resolved references and referrers."""
+
     id: int
     type: str
     references: list[ObjectSummary]
@@ -63,8 +66,9 @@ class ObjectRecord(BaseModel):
 
 class _ObjectRecordNoValue(BaseModel):
     """Object record without value.
-    
+
     Used for graph traversal and SCC analysis, where we wouldn't look at the value anyway."""
+
     id: int
     type: str
     references: list[int]
@@ -74,6 +78,7 @@ class _ObjectRecordNoValue(BaseModel):
 
 class _SizeIndexEntry(BaseModel):
     """Index entry for sorting objects by size (or subtree size) within a type."""
+
     size: int
     obj_id: int
 
@@ -89,13 +94,30 @@ class _SizeIndexEntry(BaseModel):
         return _SizeIndexEntry(size=-size, obj_id=obj_id)
 
 
+class TypeSummary(BaseModel):
+    """A summary of a type in the heap, for lightweight display."""
+
+    count: int
+    total_size: int
+
+    def _pack(self) -> bytes:
+        return struct.pack(">QQ", self.count, self.total_size)
+
+    @staticmethod
+    def _unpack(data: bytes) -> "TypeSummary":
+        count, total_size = struct.unpack(">QQ", data)
+        return TypeSummary(count=count, total_size=total_size)
+
+
 PRIMARY_DB = b"primary"
 REFERRERS_DB = b"referrers"
 TYPES_DB = b"types"
 TYPES_SIZE_INDEX_DB = b"types_size_index"
 TYPES_SUBTREE_SIZE_INDEX_DB = b"types_subtree_size_index"
+TYPE_SUMMARIES_DB = b"type_summaries"
 SCCS_SKETCH_DB = b"sccs_sketch"
 PAGE_SIZE = 1000  # Hardcode this for now
+ALL_TYPES = b"All Types"
 
 
 def _pack_id(obj_id: int) -> bytes:
@@ -124,6 +146,7 @@ def tx_write(f: F) -> F:
 
 def _wrap_txn(f: F, write=False) -> F:
     """Wrap a method to run inside an LMDB transaction, supporting nesting."""
+
     @wraps(f)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         self = args[0]
@@ -137,6 +160,7 @@ def _wrap_txn(f: F, write=False) -> F:
                 return f(*args, **kwargs)
             finally:
                 del _tx_local.txn
+
     return wrapper
 
 
@@ -151,10 +175,11 @@ class HeapDumpExplorer:
     Provides methods for importing, querying, and analyzing heap objects,
     their types, references, and relationships.
     """
+
     def __init__(self, db_path="/tmp/heap_dump_db"):
         # Set up LMDB environment and open all required databases.
         self._env = Environment(
-            db_path, map_size=10 * 1024 * 1024 * 1024, max_dbs=6
+            db_path, map_size=10 * 1024 * 1024 * 1024, max_dbs=7
         )  # 10 GB
         self._primary_db = self._env.open_db(PRIMARY_DB, integerkey=True, create=True)
         # The referrers_db is a reverse index of the primary_db, mapping
@@ -178,6 +203,7 @@ class HeapDumpExplorer:
         self._sccs_sketch_db = self._env.open_db(
             SCCS_SKETCH_DB, integerkey=True, create=True
         )
+        self._type_summaries_db = self._env.open_db(TYPE_SUMMARIES_DB, create=True)
 
     def import_dump(self, dump_path="/tmp/dump.jsonl"):
         """Import a heap dump from a JSONL file."""
@@ -209,12 +235,13 @@ class HeapDumpExplorer:
             txn().put(
                 type_name.encode(), encoded_obj_id, dupdata=True, db=self._types_db
             )
+            txn().put(ALL_TYPES, encoded_obj_id, dupdata=True, db=self._types_db)
 
             # Index by size for efficient retrieval of largest objects.
             self._put_size_index_entry(
                 obj_id, type_name, record.size, self._types_size_index_db
             )
-
+        self._build_type_summaries()
         # After import, analyze the object graph for SCCs and subtree sizes.
         self._explore_strongly_connected_components()
 
@@ -258,14 +285,14 @@ class HeapDumpExplorer:
         return model.model_validate_json(data)
 
     @tx
-    def get_type_counts(self) -> list[tuple[str, int]]:
+    def get_type_summaries(self) -> list[tuple[str, TypeSummary]]:
         """Return a list of (type_name, count) for all types in the heap."""
-        type_counts: Counter[str] = Counter()
-        cursor = txn().cursor(db=self._types_db)
+        summaries = []
+        cursor = txn().cursor(db=self._type_summaries_db)
         for key in cursor.iternext_nodup(keys=True, values=False):
             assert isinstance(key, bytes)
-            type_counts[key.decode()] += cursor.count()
-        return type_counts.most_common()
+            summaries.append((key.decode(), TypeSummary._unpack(cursor.value())))
+        return summaries
 
     @tx
     def get_count_for_type(self, type_name: str) -> int:
@@ -391,6 +418,12 @@ class HeapDumpExplorer:
             dupdata=True,
             db=db,
         )
+        txn().put(
+            ALL_TYPES,
+            size_index_entry._pack(),
+            dupdata=True,
+            db=db,
+        )
 
     def _put_sccs_sketch(self, obj_id: int, sccs: SetSketch):
         """Store the SCC sketch for an object."""
@@ -405,6 +438,39 @@ class HeapDumpExplorer:
         data = txn().get(_pack_id(obj_id), db=self._sccs_sketch_db)
         assert data is not None, f"No sketch found for obj_id {obj_id}"
         return SetSketch(from_bytes=data)
+
+    @tx_write
+    def _build_type_summaries(self):
+        t = txn()
+        with (
+            t.cursor(db=self._type_summaries_db) as summaries_cursor,
+            t.cursor(db=self._types_size_index_db) as types_cursor,
+        ):
+
+            last_key: bytes | None = None
+            total_size = 0
+            count = 0
+            def _flush():
+                nonlocal last_key, total_size, count
+                if last_key is not None:
+                    summaries_cursor.put(
+                        last_key,
+                        TypeSummary(count=count, total_size=total_size)._pack(),
+                    )
+                    last_key = None
+                    total_size = 0
+                    count = 0
+            for type_key, size_value in types_cursor.iternext(keys=True, values=True):
+                assert isinstance(size_value, bytes) and isinstance(type_key, bytes)
+                if type_key != last_key:
+                    _flush()
+
+                last_key = type_key
+                size_index_entry = _SizeIndexEntry._unpack(size_value)
+                total_size += size_index_entry.size
+                count += 1
+
+            _flush()
 
     def _should_skip_link_in_subtree_exploration(
         self, link: _ObjectRecordNoValue | None
@@ -433,6 +499,7 @@ class HeapDumpExplorer:
             GraphSCCVisitor[_ObjectRecordNoValue, int, int, WalkResult]
         ):
             """Visitor for traversing the object graph and computing SCCs and subtree sizes."""
+
             def __init__(self):
                 super().__init__()
                 self.known_skips: set[int] = set()

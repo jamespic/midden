@@ -5,7 +5,7 @@ from ntpath import basename
 import os
 
 from flask import Flask, request, redirect, url_for, render_template, session
-from .heap_dump_explorer import HeapDumpExplorer
+from .heap_dump_explorer import HeapDumpExplorer, TypeSummary
 
 DUMPS_DIR = os.getenv("DUMPS_DIR", "/tmp/dumps")
 
@@ -48,9 +48,17 @@ def create_app():
     def explore_dump(dump_name):
         explorer = get_dump(dump_name)
         # For simplicity, just show a count of objects by type
-        type_counts: list[tuple[str, int]] = explorer.get_type_counts()
+        type_summaries: list[tuple[str, TypeSummary]] = explorer.get_type_summaries()
+        sort_by = request.args.get("sort_by", "count")
+        match sort_by:
+            case "size":
+                type_summaries.sort(key=lambda x: x[1].total_size, reverse=True)
+            case "type":
+                type_summaries.sort(key=lambda x: x[0])
+            case "count" | _:
+                type_summaries.sort(key=lambda x: x[1].count, reverse=True)
         return render_template(
-            "explore.html", dump_name=dump_name, type_counts=type_counts
+            "explore.html", dump_name=dump_name, type_summaries=type_summaries
         )
 
     @app.route("/explore/<dump_name>/type/<type_name>")
