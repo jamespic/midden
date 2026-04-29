@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Callable
 from dataclasses import dataclass
-from midden.tarjan import GraphSCCVisitor, visit_sccs
+from ..tarjan import GraphSCCVisitor, visit_sccs
 
 
 @dataclass

@@ -1,5 +1,5 @@
 from enum import Enum
-from midden.long_stack import run_with_long_stack
+from midden.util.long_stack import run_with_long_stack
 from collections.abc import Generator, Callable
 from typing import TypeVar, Generic, Iterable
 from dataclasses import dataclass
@@ -21,6 +21,7 @@ class _BookkeepingEntry:
     index: int
     lowlink: int
     on_stack: bool
+    scc: int | None = None
 
 
 @dataclass(slots=True)
@@ -85,6 +86,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
     bookkeeping: dict[NodeIdT, _BookkeepingEntry] = {}
     stack: list[_StackEntry[NodeIdT, NodeAccT]] = []
     index = 0
+    next_scc_index = 0
     scc_accs: dict[int, SCCAccT] = {}
     scc_to_child_sccs: dict[int, set[int]] = {}
 
@@ -93,7 +95,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
     ) -> Generator[
         set[int], None, set[int]
     ]:  # Returns set of SCCs that are children of this node
-        nonlocal index
+        nonlocal index, next_scc_index
         obj_id = visitor.get_node_id(obj)
         entry = _BookkeepingEntry(index=index, lowlink=index, on_stack=True)
         bookkeeping[obj_id] = entry
@@ -112,15 +114,14 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
             elif bookkeeping_entry.on_stack:
                 entry.lowlink = min(entry.lowlink, bookkeeping_entry.index)
             else:
-                # We use lowlink to hold SCC ids for nodes that have already been fully processed,
-                # since we won't be visiting them again and we need some way to identify
-                # which SCC they belong to when we accumulate results for parent SCCs
-                linked_scc = bookkeeping[successor_id].lowlink
+                linked_scc = bookkeeping[successor_id].scc
+                assert linked_scc is not None
                 reachable_sccs.update(scc_to_child_sccs[linked_scc])
 
         if entry.index == entry.lowlink:
             # Found an SCC root, pop the stack and calculate size
-            scc = entry.index
+            scc = next_scc_index
+            next_scc_index += 1
 
             acc: NodeAccT | _EmptySentinel = _EMPTY_SENTINEL
             scc_members: set[NodeIdT] = set()
@@ -134,7 +135,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
                 )
                 bookkeeping_item = bookkeeping[member.id]
                 bookkeeping_item.on_stack = False
-                bookkeeping_item.lowlink = scc  # Set lowlink to SCC index for all members of the SCC, so we can identify which SCC they belong to later
+                bookkeeping_item.scc = scc
 
                 if member.id == obj_id:
                     break

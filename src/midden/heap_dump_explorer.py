@@ -2,9 +2,9 @@
 It uses LMDB to store the data on disk and provides methods for querying objects, their types, and their relationships.
 """
 
-from midden.tarjan import GraphSCCVisitor, visit_sccs
+from midden.util.tarjan import GraphSCCVisitor, visit_sccs
 
-from midden.set_sketch import SetSketch
+from midden.util.set_sketch import SetSketch
 
 from dataclasses import dataclass
 
