@@ -1,7 +1,6 @@
 """A class that allows exploring heap dumps exported by dump_heap.py.
 It uses LMDB to store the data on disk and provides methods for querying objects, their types, and their relationships.
 """
-from midden.util.memoizer import Memoizer
 from summed_radix_tree import SummedRadixTree
 
 from midden.util.tarjan import GraphSCCVisitor, visit_sccs
@@ -508,7 +507,6 @@ class HeapDumpExplorer:
             def __init__(self):
                 super().__init__()
                 self.known_skips: set[int] = set()
-                self.memoizer = Memoizer[SummedRadixTree]()
 
             def accumulate_node_values(self, v1: int, v2: int) -> int:
                 # Sum node values (sizes) for SCC accumulation.
