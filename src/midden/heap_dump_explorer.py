@@ -1,6 +1,8 @@
 """A class that allows exploring heap dumps exported by dump_heap.py.
 It uses LMDB to store the data on disk and provides methods for querying objects, their types, and their relationships.
 """
+from midden.util.memoizer import Memoizer
+from summed_radix_tree import SummedRadixTree
 
 from midden.util.tarjan import GraphSCCVisitor, visit_sccs
 
@@ -491,9 +493,12 @@ class HeapDumpExplorer:
 
         @dataclass(slots=True)
         class WalkResult:
-            subtree_size: int
+            subtree_size_radix_tree: SummedRadixTree
             size: int
             scc_sketch: SetSketch
+            @property
+            def subtree_size(self) -> int:
+                return self.subtree_size_radix_tree.total
 
         class ObjectGraphVisitor(
             GraphSCCVisitor[_ObjectRecordNoValue, int, int, WalkResult]
@@ -503,28 +508,43 @@ class HeapDumpExplorer:
             def __init__(self):
                 super().__init__()
                 self.known_skips: set[int] = set()
+                self.memoizer = Memoizer[SummedRadixTree]()
 
             def accumulate_node_values(self, v1: int, v2: int) -> int:
                 # Sum node values (sizes) for SCC accumulation.
                 return v1 + v2
+            
+            def accumulate_scc_values(self, scc_acc: WalkResult, child_scc_acc: WalkResult) -> WalkResult:
+                # Combine SCC values by summing subtree sizes and merging sketches.
+                combined_subtree_size_tree = scc_acc.subtree_size_radix_tree.union(
+                    child_scc_acc.subtree_size_radix_tree
+                )
+                combined_scc_sketch = scc_acc.scc_sketch.union(child_scc_acc.scc_sketch)
+                return WalkResult(
+                    subtree_size_radix_tree=combined_subtree_size_tree,
+                    size=scc_acc.size,  # size of the current SCC doesn't change when combining with child SCCs
+                    scc_sketch=combined_scc_sketch,
+                )
 
-            def accumulate(
+            def add_node_value_to_scc_value(
                 self,
                 node_acc: int,
                 this_scc: int,
-                scc_values: Iterable[tuple[int, WalkResult]],
+                scc_acc: WalkResult | None,
             ) -> WalkResult:
                 # Combine node and child SCC values to compute subtree size and SCC sketch.
-                subtree_size = node_acc + sum(
-                    child_scc.size for _, child_scc in scc_values
-                )
-                scc_sketch = (
-                    SetSketch()
-                    .add_all(child_scc_id for child_scc_id, _ in scc_values)
-                    .add(this_scc)
-                )
+                if scc_acc is None:
+                    scc_acc = WalkResult(
+                        subtree_size_radix_tree=SummedRadixTree(),
+                        size=0,
+                        scc_sketch=SetSketch(),
+                    )
+                new_subtree_size_tree = scc_acc.subtree_size_radix_tree.add(this_scc, node_acc)
+                new_scc_sketch = scc_acc.scc_sketch.add(this_scc)
                 return WalkResult(
-                    size=node_acc, subtree_size=subtree_size, scc_sketch=scc_sketch
+                    subtree_size_radix_tree=new_subtree_size_tree,
+                    size=node_acc,
+                    scc_sketch=new_scc_sketch,
                 )
 
             def iterate_nodes(

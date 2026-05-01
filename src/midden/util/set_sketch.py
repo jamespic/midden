@@ -70,6 +70,15 @@ class SetSketch:
         for item in items:
             self.add(item)
         return self
+    
+    def union(self, other: "SetSketch") -> "SetSketch":
+        """Return a new sketch that represents the union of this sketch and another."""
+        if self.num_hashes != other.num_hashes:
+            raise ValueError("Cannot union sketches with different parameters")
+        new_sketch = SetSketch(num_hashes=self.num_hashes)
+        for i in range(self.num_hashes):
+            new_sketch._registers[i] = min(self._registers[i], other._registers[i])
+        return new_sketch
 
     def is_subset_of(self, other: "SetSketch") -> bool:
         """Test whether this sketch's set is possibly a subset of other's set.

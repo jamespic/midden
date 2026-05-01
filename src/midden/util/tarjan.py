@@ -1,4 +1,4 @@
-from .persistent_bitset import PersistentBitSet
+from re import S
 from enum import Enum
 from midden.util.long_stack import run_with_long_stack
 from collections.abc import Generator, Callable
@@ -65,11 +65,15 @@ class GraphSCCVisitor(Generic[NodeT, NodeIdT, NodeAccT, SCCAccT]):
         """Override this to define how to accumulate two node values. This is used to combine values of nodes in the same SCC."""
         raise NotImplementedError
 
-    def accumulate(
+    def accumulate_scc_values(self, scc_acc: SCCAccT, child_scc_acc: SCCAccT) -> SCCAccT:
+        """Override this to define how to accumulate values of child SCCs into a parent SCC value."""
+        raise NotImplementedError
+
+    def add_node_value_to_scc_value(
         self,
         node_acc: NodeAccT,
         this_scc: int,
-        scc_values: Iterable[tuple[int, SCCAccT]],
+        scc_acc: SCCAccT | None,
     ) -> SCCAccT:
         """Override this to define how to accumulate node and child SCC values into an SCC value."""
         raise NotImplementedError
@@ -89,13 +93,12 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
     index = 0
     next_scc_index = 0
     scc_accs: dict[int, SCCAccT] = {}
-    scc_to_child_sccs: dict[int, PersistentBitSet] = {}
-    # scc_set_memoizer = Memoizer[PersistentBitSet]()
+    
 
     def strongconnect(
         obj: NodeT,
     ) -> Generator[
-        PersistentBitSet, None, PersistentBitSet
+        SCCAccT, None, SCCAccT
     ]:  # Returns set of SCCs that are children of this node
         nonlocal index, next_scc_index
         obj_id = visitor.get_node_id(obj)
@@ -103,22 +106,30 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
         bookkeeping[obj_id] = entry
         stack.append(_StackEntry(id=obj_id, acc=visitor.get_node_acc(obj)))
         index += 1
-        reachable_sccs: PersistentBitSet = PersistentBitSet.empty()
+        scc_acc: SCCAccT | None = None
+        def _acc_scc(other: SCCAccT | None) -> None:
+            nonlocal scc_acc
+            if scc_acc is None:
+                scc_acc = other
+                return
+            if other is None:
+                return
+            scc_acc = visitor.accumulate_scc_values(scc_acc, other)
 
         for successor in visitor.get_successors(obj):
             # Don't include references from modules in the graph, since they create huge SCCs that aren't interesting
             successor_id = visitor.get_node_id(successor)
             bookkeeping_entry = bookkeeping.get(successor_id)
             if bookkeeping_entry is None:
-                child_sccs = yield strongconnect(successor)
-                reachable_sccs = reachable_sccs.union(child_sccs)
+                child_scc_acc = yield strongconnect(successor)
+                _acc_scc(child_scc_acc)
                 entry.lowlink = min(entry.lowlink, bookkeeping[successor_id].lowlink)
             elif bookkeeping_entry.on_stack:
                 entry.lowlink = min(entry.lowlink, bookkeeping_entry.index)
             else:
                 linked_scc = bookkeeping[successor_id].scc
                 assert linked_scc is not None
-                reachable_sccs = reachable_sccs.union(scc_to_child_sccs[linked_scc])
+                _acc_scc(scc_accs[linked_scc])
 
         if entry.index == entry.lowlink:
             # Found an SCC root, pop the stack and calculate size
@@ -142,19 +153,17 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
                 if member.id == obj_id:
                     break
             assert acc is not _EMPTY_SENTINEL
-            scc_acc = visitor.accumulate(
+            scc_acc = visitor.add_node_value_to_scc_value(
                 acc,
                 scc,
-                ((child_scc, scc_accs[child_scc]) for child_scc in reachable_sccs),
+                scc_acc
             )
             scc_accs[scc] = scc_acc
 
             for member_id in scc_members:
                 visitor.emit_result(member_id, scc_acc)
-            reachable_sccs = reachable_sccs.add(scc)
-            scc_to_child_sccs[scc] = reachable_sccs
 
-        return reachable_sccs
+        return scc_acc
 
     for obj in visitor.iterate_nodes(bookkeeping.__contains__):
         obj_id = visitor.get_node_id(obj)

@@ -4,15 +4,15 @@ from ..tarjan import GraphSCCVisitor, visit_sccs
 
 
 @dataclass
-class Count:
-    count_in_this_scc: int
-    reachable_count: int
+class Accumulator:
+    ids_in_this_scc: set[int]
+    reachable_ids: set[int]
 
 
-class TestVisitor(GraphSCCVisitor[int, int, int, Count]):
+class TestVisitor(GraphSCCVisitor[int, int, set[int], Accumulator]):
     def __init__(self, graph: dict[int, list[int]]):
         self.graph = graph
-        self.results: dict[int, Count] = {}
+        self.results: dict[int, Accumulator] = {}
 
     def iterate_nodes(self, already_visited: Callable[[int], bool]) -> Iterable[int]:
         for node in self.graph:
@@ -25,21 +25,32 @@ class TestVisitor(GraphSCCVisitor[int, int, int, Count]):
     def get_node_id(self, node: int) -> int:
         return node
 
-    def get_node_acc(self, node: int) -> int:
-        return 1
+    def get_node_acc(self, node: int) -> set[int]:
+        return {node}
 
-    def accumulate_node_values(self, v1: int, v2: int) -> int:
-        return v1 + v2
+    def accumulate_node_values(self, v1: set[int], v2: set[int]) -> set[int]:
+        return v1.union(v2)
 
-    def accumulate(
-        self, node_acc: int, this_scc: int, scc_values: Iterable[tuple[int, Count]]
-    ) -> Count:
-        reachable_count = (
-            sum(scc_value.count_in_this_scc for _, scc_value in scc_values) + node_acc
+    def accumulate_scc_values(
+        self, scc_acc: Accumulator, child_scc_acc: Accumulator
+    ) -> Accumulator:
+        return Accumulator(
+            ids_in_this_scc=scc_acc.ids_in_this_scc,
+            reachable_ids=scc_acc.reachable_ids.union(child_scc_acc.reachable_ids),
         )
-        return Count(count_in_this_scc=node_acc, reachable_count=reachable_count)
 
-    def emit_result(self, node_id: int, scc_acc: Count):
+    def add_node_value_to_scc_value(
+        self, node_acc: set[int], this_scc: int, scc_acc: Accumulator | None
+    ) -> Accumulator:
+        if scc_acc is None:
+            return Accumulator(ids_in_this_scc=node_acc, reachable_ids=node_acc)
+        else:
+            return Accumulator(
+                ids_in_this_scc=node_acc,
+                reachable_ids=scc_acc.reachable_ids.union(node_acc),
+            )
+
+    def emit_result(self, node_id: int, scc_acc: Accumulator):
         self.results[node_id] = scc_acc
 
 
@@ -60,12 +71,12 @@ def test_tarjan():
     visitor = TestVisitor(test_graph)
     visit_sccs(visitor)
     assert visitor.results == {
-        1: Count(count_in_this_scc=3, reachable_count=3),
-        2: Count(count_in_this_scc=3, reachable_count=3),
-        3: Count(count_in_this_scc=3, reachable_count=3),
-        4: Count(count_in_this_scc=2, reachable_count=7),
-        5: Count(count_in_this_scc=2, reachable_count=7),
-        6: Count(count_in_this_scc=2, reachable_count=5),
-        7: Count(count_in_this_scc=2, reachable_count=5),
-        8: Count(count_in_this_scc=1, reachable_count=8),
+        1: Accumulator(ids_in_this_scc={1, 2, 3}, reachable_ids={1, 2, 3}),
+        2: Accumulator(ids_in_this_scc={1, 2, 3}, reachable_ids={1, 2, 3}),
+        3: Accumulator(ids_in_this_scc={1, 2, 3}, reachable_ids={1, 2, 3}),
+        4: Accumulator(ids_in_this_scc={4, 5}, reachable_ids={1, 2, 3, 4, 5, 6, 7}),
+        5: Accumulator(ids_in_this_scc={4, 5}, reachable_ids={1, 2, 3, 4, 5, 6, 7}),
+        6: Accumulator(ids_in_this_scc={6, 7}, reachable_ids={1, 2, 3, 6, 7}),
+        7: Accumulator(ids_in_this_scc={6, 7}, reachable_ids={1, 2, 3, 6, 7}),
+        8: Accumulator(ids_in_this_scc={8}, reachable_ids={1, 2, 3, 4, 5, 6, 7, 8}),
     }

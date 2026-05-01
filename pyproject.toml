@@ -7,6 +7,8 @@ authors = [
     { name = "James Pickering", email = "james.pickering@airelogic.com" },
 ]
 requires-python = ">=3.10"
+dependencies = []
+license = "MIT"
 
 [project.optional-dependencies]
 ui = [
@@ -15,6 +17,7 @@ ui = [
     "psutil>=7.2.2",
     "pydantic>=2.12.5",
     "xxhash>=3.6.0",
+    "summed-radix-tree",
 ]
 
 [project.scripts]
@@ -27,3 +30,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = ["pytest>=9.0.2", "ruff>=0.15.7", "ty>=0.0.24"]
+
+[tool.uv.sources]
+summed-radix-tree = { path = "summed_radix_tree-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl" }
