@@ -1,6 +1,4 @@
-use std::hash::{Hash, Hasher};
-
-use ahash::AHasher;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SetMembershipSketch<const N: usize> {
@@ -16,7 +14,7 @@ impl<const N: usize> SetMembershipSketch<N> {
 
     pub fn add<H: Hash>(&mut self, item: &H) {
         for i in 0..N {
-            let mut hasher = AHasher::default();
+            let mut hasher = DefaultHasher::new();
             hasher.write_usize(i);
             item.hash(&mut hasher);
             let h = hasher.finish() as u32;
@@ -47,24 +45,21 @@ impl<const N: usize> SetMembershipSketch<N> {
         self.registers.iter().all(|&r| r == u32::MAX)
     }
 
-    pub fn to_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self.registers.as_ptr() as *const u8,
-                N * std::mem::size_of::<u32>(),
-            )
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(N * std::mem::size_of::<u32>());
+        for &r in &self.registers {
+            result.extend_from_slice(&r.to_le_bytes());
         }
+        result
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
         assert_eq!(bytes.len(), N * std::mem::size_of::<u32>());
         let mut registers = [0u32; N];
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                registers.as_mut_ptr() as *mut u8,
-                bytes.len(),
-            );
+        for i in 0..N {
+            let start = i * std::mem::size_of::<u32>();
+            let end = start + std::mem::size_of::<u32>();
+            registers[i] = u32::from_le_bytes(bytes[start..end].try_into().unwrap());
         }
         Self { registers }
     }
@@ -85,7 +80,7 @@ mod tests {
         assert!(!sketch.is_empty());
 
         let bytes = sketch.to_bytes();
-        let sketch2 = SetMembershipSketch::<4>::from_bytes(bytes);
+        let sketch2 = SetMembershipSketch::<4>::from_bytes(bytes.as_slice());
         assert_eq!(sketch, sketch2);
 
         let mut sketch3 = SetMembershipSketch::<4>::new();

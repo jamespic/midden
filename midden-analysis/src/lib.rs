@@ -1,21 +1,27 @@
 use pyo3::prelude::*;
 
-mod summed_radix_tree;
-mod size_sketch;
 mod set_membership_sketch;
+mod size_sketch;
+mod summed_radix_tree;
 /// A Python module implemented in Rust.
 #[pymodule]
 mod midden_analysis {
-    use std::{sync::{Arc}};
+    use std::sync::Arc;
 
-    use pyo3::{exceptions::PyStopIteration, prelude::*, types::{PyDict, PyTuple}};
-    use crate::summed_radix_tree::{SummedRadixTree as InnerSummedRadixTree, EMPTY, SummedRadixTreeIterator};
+    use crate::set_membership_sketch::DefaultMembershipSketch;
     use crate::size_sketch::{
+        HighPrecisionSizeSketch as InnerHighPrecisionSizeSketch,
         LowPrecisionSizeSketch as InnerLowPrecisionSizeSketch,
         MediumPrecisionSizeSketch as InnerMediumPrecisionSizeSketch,
-        HighPrecisionSizeSketch as InnerHighPrecisionSizeSketch,
     };
-    use crate::set_membership_sketch::DefaultMembershipSketch;
+    use crate::summed_radix_tree::{
+        EMPTY, SummedRadixTree as InnerSummedRadixTree, SummedRadixTreeIterator,
+    };
+    use pyo3::{
+        exceptions::PyStopIteration,
+        prelude::*,
+        types::{PyDict, PyTuple},
+    };
 
     #[pyclass(frozen)]
     struct SummedRadixTree(Arc<InnerSummedRadixTree>);
@@ -52,7 +58,6 @@ mod midden_analysis {
             SummedRadixTree(self.0.union(&other.0))
         }
 
-
         fn total(&self) -> u64 {
             self.0.total()
         }
@@ -63,7 +68,9 @@ mod midden_analysis {
 
         fn __add__(&self, other: &Bound<'_, PyTuple>) -> PyResult<Self> {
             if other.len() != 2 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Expected a tuple of (element, value)"));
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Expected a tuple of (element, value)",
+                ));
             }
             let element: usize = other.get_item(0)?.extract()?;
             let value: u64 = other.get_item(1)?.extract()?;
@@ -87,7 +94,11 @@ mod midden_analysis {
         }
 
         fn __str__(&self) -> String {
-            let elements: Vec<String> = self.__iter__().0.map(|e| format!("{}: {}", e.0, e.1)).collect();
+            let elements: Vec<String> = self
+                .__iter__()
+                .0
+                .map(|e| format!("{}: {}", e.0, e.1))
+                .collect();
             format!("SummedRadixTree({{{}}})", elements.join(", "))
         }
 
@@ -114,7 +125,9 @@ mod midden_analysis {
         }
 
         fn __next__(mut slf: PyRefMut<Self>) -> PyResult<(usize, u64)> {
-            slf.0.next().ok_or_else(|| PyStopIteration::new_err("No more items"))
+            slf.0
+                .next()
+                .ok_or_else(|| PyStopIteration::new_err("No more items"))
         }
     }
 
@@ -129,7 +142,11 @@ mod midden_analysis {
             Self(InnerLowPrecisionSizeSketch::new())
         }
 
-        fn add<'a>(slf: Bound<'a, Self>, id: Bound<'_, PyAny>, value: f64) -> PyResult<Bound<'a, Self>> {
+        fn add<'a>(
+            slf: Bound<'a, Self>,
+            id: Bound<'_, PyAny>,
+            value: f64,
+        ) -> PyResult<Bound<'a, Self>> {
             slf.borrow_mut().0.add(id.hash()?, value);
             Ok(slf)
         }
@@ -169,7 +186,11 @@ mod midden_analysis {
             Self(InnerMediumPrecisionSizeSketch::new())
         }
 
-        fn add<'a>(slf: Bound<'a, Self>, id: Bound<'_, PyAny>, value: f64) -> PyResult<Bound<'a, Self>> {
+        fn add<'a>(
+            slf: Bound<'a, Self>,
+            id: Bound<'_, PyAny>,
+            value: f64,
+        ) -> PyResult<Bound<'a, Self>> {
             slf.borrow_mut().0.add(id.hash()?, value);
             Ok(slf)
         }
@@ -209,7 +230,11 @@ mod midden_analysis {
             Self(InnerHighPrecisionSizeSketch::new())
         }
 
-        fn add<'a>(slf: Bound<'a, Self>, id: Bound<'_, PyAny>, value: f64) -> PyResult<Bound<'a, Self>> {
+        fn add<'a>(
+            slf: Bound<'a, Self>,
+            id: Bound<'_, PyAny>,
+            value: f64,
+        ) -> PyResult<Bound<'a, Self>> {
             slf.borrow_mut().0.add(id.hash()?, value);
             Ok(slf)
         }
@@ -254,13 +279,16 @@ mod midden_analysis {
             Ok(slf)
         }
 
-        fn add_all<'a>(slf: Bound<'a, Self>, items: &Bound<'_, PyAny>) -> PyResult<Bound<'a, Self>> {
+        fn add_all<'a>(
+            slf: Bound<'a, Self>,
+            items: &Bound<'_, PyAny>,
+        ) -> PyResult<Bound<'a, Self>> {
             let items: Vec<Bound<'_, PyAny>> = items.extract()?;
             for item in items {
                 slf.borrow_mut().0.add(&(item.hash()?));
             }
             Ok(slf)
-         }
+        }
 
         fn union(&self, other: &SetMembershipSketch) -> Self {
             Self(self.0.union(&other.0))
@@ -279,7 +307,15 @@ mod midden_analysis {
         }
 
         fn __str__(&self) -> String {
-            format!("SetMembershipSketch.from_bytes([{}])", self.0.to_bytes().iter().map(|b| b.to_string()).collect::<Vec<_>>().join(", "))
+            format!(
+                "SetMembershipSketch.from_bytes([{}])",
+                self.0
+                    .to_bytes()
+                    .iter()
+                    .map(|b| b.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         }
 
         fn __repr__(&self) -> String {
@@ -295,7 +331,7 @@ mod midden_analysis {
         }
 
         fn to_bytes(&self) -> Vec<u8> {
-            self.0.to_bytes().to_vec()
+            self.0.to_bytes()
         }
 
         #[staticmethod]
@@ -303,7 +339,6 @@ mod midden_analysis {
             Self(DefaultMembershipSketch::from_bytes(bytes))
         }
     }
-
 
     #[cfg(test)]
     mod tests {
@@ -366,10 +401,5 @@ mod midden_analysis {
             test_one_to_ten: vec![(0..10).map(|i| (i, i as u64 + 1)).collect()],
             test_descending_one_to_ten: vec![(0..10).rev().map(|i| (i, i as u64 + 1)).collect()]
         );
-
-
     }
-
-
-
 }

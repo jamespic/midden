@@ -1,24 +1,30 @@
-use std::{array, sync::{Arc, LazyLock}};
+use std::{
+    array,
+    sync::{Arc, LazyLock},
+};
 
-use xxhash_rust::xxh3::{Xxh3Default};
+use xxhash_rust::xxh3::Xxh3Default;
 
 const FANOUT: usize = 8;
-
-
 
 #[derive(Debug)]
 pub enum SummedRadixTree {
     Empty,
-    Leaf{values:[u64; FANOUT], hash: u128, total: u64},
+    Leaf {
+        values: [u64; FANOUT],
+        hash: u128,
+        total: u64,
+    },
     Branch {
         level: u8,
         children: [Arc<SummedRadixTree>; FANOUT],
         hash: u128,
-        total: u64
+        total: u64,
     },
 }
 
-pub static EMPTY: LazyLock<Arc<SummedRadixTree>> = LazyLock::new(|| Arc::new(SummedRadixTree::Empty));
+pub static EMPTY: LazyLock<Arc<SummedRadixTree>> =
+    LazyLock::new(|| Arc::new(SummedRadixTree::Empty));
 
 impl SummedRadixTree {
     pub fn get_value(&self, position: usize) -> u64 {
@@ -31,7 +37,9 @@ impl SummedRadixTree {
                     values[position]
                 }
             }
-            Self::Branch { level, children, .. } => {
+            Self::Branch {
+                level, children, ..
+            } => {
                 let items_per_element = FANOUT.pow(*level as u32);
                 let child_index = position / items_per_element;
                 if child_index >= FANOUT {
@@ -39,7 +47,6 @@ impl SummedRadixTree {
                 } else {
                     let child_offset = position % items_per_element;
                     children[child_index].get_value(child_offset)
-                    
                 }
             }
         }
@@ -76,9 +83,14 @@ impl SummedRadixTree {
             (_, Self::Empty) => self.clone(),
             (s, o) if s.unique_hash() == o.unique_hash() => self.clone(),
             (Self::Leaf { .. }, Self::Branch { .. }) => {
-                other.union(self)  // Let the bigger tree handle merging
+                other.union(self) // Let the bigger tree handle merging
             }
-            (Self::Branch { level, children, .. }, Self::Leaf { .. }) => {
+            (
+                Self::Branch {
+                    level, children, ..
+                },
+                Self::Leaf { .. },
+            ) => {
                 let mut new_children = children.clone();
                 new_children[0] = new_children[0].clone().union(other);
                 let hash = Self::_calculate_branch_hash(&new_children);
@@ -90,7 +102,18 @@ impl SummedRadixTree {
                     total,
                 })
             }
-            (Self::Branch { level: l1, children: c1, .. }, Self::Branch { level: l2, children: c2, .. }) => {
+            (
+                Self::Branch {
+                    level: l1,
+                    children: c1,
+                    ..
+                },
+                Self::Branch {
+                    level: l2,
+                    children: c2,
+                    ..
+                },
+            ) => {
                 match l1.cmp(l2) {
                     std::cmp::Ordering::Greater => {
                         let mut new_children = c1.clone();
@@ -105,7 +128,7 @@ impl SummedRadixTree {
                         })
                     }
                     std::cmp::Ordering::Less => {
-                        other.union(self)  // Let the bigger tree handle merging
+                        other.union(self) // Let the bigger tree handle merging
                     }
                     std::cmp::Ordering::Equal => {
                         let new_children = array::from_fn(|i| c1[i].clone().union(&c2[i]));
@@ -134,11 +157,8 @@ impl SummedRadixTree {
                     })
                 }
             }
-            
-            
         }
     }
-
 
     fn _with_single_position_set(position: usize, value: u64) -> Self {
         let leaf_index = position / FANOUT;
@@ -149,7 +169,7 @@ impl SummedRadixTree {
         let mut result = Self::Leaf {
             values: leaf_values,
             hash: Self::_calculate_leaf_hash(&leaf_values),
-            total: value
+            total: value,
         };
 
         // Make parent branch nodes as needed
@@ -172,7 +192,6 @@ impl SummedRadixTree {
         }
 
         result
-        
     }
 
     fn _calculate_branch_hash(children: &[Arc<Self>; FANOUT]) -> u128 {
@@ -198,9 +217,10 @@ impl SummedRadixTree {
             Self::Leaf { .. } => size_of::<Self>(),
             Self::Branch { children, .. } => {
                 size_of::<Self>()
-                + children.iter().map(
-                    |child| child._estimate_size_fudging_refcounts()
-                ).sum::<usize>()
+                    + children
+                        .iter()
+                        .map(|child| child._estimate_size_fudging_refcounts())
+                        .sum::<usize>()
             }
         }
     }
@@ -245,7 +265,9 @@ impl Iterator for SummedRadixTreeIterator {
                 }
                 None
             }
-            SummedRadixTree::Branch { level, children, .. } => {
+            SummedRadixTree::Branch {
+                level, children, ..
+            } => {
                 if let Some(child_iter) = &mut self.child_iter {
                     if let Some(item) = child_iter.next() {
                         return Some(item);
@@ -256,10 +278,14 @@ impl Iterator for SummedRadixTreeIterator {
 
                 while self.child_index < FANOUT {
                     let child = &children[self.child_index];
-                    let current_offset = self.offset + self.child_index * FANOUT.pow((*level) as u32);
+                    let current_offset =
+                        self.offset + self.child_index * FANOUT.pow((*level) as u32);
                     self.child_index += 1;
                     if child.total() > 0 {
-                        self.child_iter = Some(Box::new(SummedRadixTreeIterator::new(child.clone(), current_offset)));
+                        self.child_iter = Some(Box::new(SummedRadixTreeIterator::new(
+                            child.clone(),
+                            current_offset,
+                        )));
                         if let Some(item) = self.child_iter.as_mut().unwrap().next() {
                             return Some(item);
                         } else {
@@ -272,4 +298,3 @@ impl Iterator for SummedRadixTreeIterator {
         }
     }
 }
-

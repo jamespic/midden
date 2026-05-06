@@ -1,19 +1,18 @@
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
-use ahash::AHasher;
 use float16::Bf16;
 
-pub struct SizeSketch <const N: usize> {
+pub struct SizeSketch<const N: usize> {
     /** A sum-distinct sketch for estimating the size of a multiset */
     /* The key observation that powers this sketch is that if we have exponential random variables
      * with parameters lambda_1, lambda_2, ..., lambda_n, then the minimum of these random variables is an exponential
      * with parameter lambda_1 + lambda_2 + ... + lambda_n.
-     * 
+     *
      * At a high level, it works by, every time a new value is added, deterministically generating N exponential random variables with
      * parameters equal to the value being added, comparing them with the values already there, and taking the minimum.
      * We then estimate the size of the multiset by taking the third quartile of the values in the sketch (the third quartile gave the
      * best results of all the estimators we tried), and deriving an estimate for lambda from that.
-     * 
+     *
      * We do one key thing differently though, as an optimisation. We derive the estimate for lambda _before_ adding the new value.
      * We estimate lambda as -log(1 - p) / x, so doing this reverses the order of comparison (so we actually take maxima rather
      * than minima, and take the first quartile), but means that we can store the estimate
@@ -22,7 +21,7 @@ pub struct SizeSketch <const N: usize> {
     values: [Bf16; N],
 }
 
-impl <const N: usize> SizeSketch<N> {
+impl<const N: usize> SizeSketch<N> {
     pub fn new() -> Self {
         Self {
             values: [Bf16::from_f64(0.0); N],
@@ -32,7 +31,7 @@ impl <const N: usize> SizeSketch<N> {
     pub fn add<I: Hash>(&mut self, id: I, value: f64) {
         let log_one_minus_p = (0.25f64).ln();
         for i in 0..N {
-            let mut hasher = AHasher::default();
+            let mut hasher = DefaultHasher::new();
             hasher.write_usize(i);
             id.hash(&mut hasher);
             let hash = hasher.finish();
@@ -58,7 +57,10 @@ impl <const N: usize> SizeSketch<N> {
 
     pub fn estimate(&self) -> f64 {
         let mut values: [Bf16; N] = self.values;
-        let q1 = values.as_mut_slice().select_nth_unstable_by((N + 1) / 4 - 1, Bf16::total_cmp).1;
+        let q1 = values
+            .as_mut_slice()
+            .select_nth_unstable_by((N + 1) / 4 - 1, Bf16::total_cmp)
+            .1;
         (*q1).into()
     }
 }
@@ -71,7 +73,7 @@ pub type HighPrecisionSizeSketch = SizeSketch<127>;
 mod test {
     use std::array;
 
-use super::*;
+    use super::*;
 
     macro_rules! make_test {
         ($($testname:ident $typename:ident $precision:literal),*) => {
@@ -88,7 +90,7 @@ use super::*;
                         sketch.add(10 * i + 3, 30.0);
                         sketch.add(10 * i + 4, 40.0);
                         sketch.add(10 * i + 4, 40.0); // Duplicate value, should not affect the sketch.
-                        
+
                         sketch
                     });
                     let estimates = sketches.map(|s| {
@@ -105,7 +107,7 @@ use super::*;
                         "{}: Average estimate: {}, average error: {}, RMSE: {}, correct estimates within {}%: {} out of 1000",
                         stringify!($typename), sum / 1000.0, sum_err / 1000.0, (sum_sq_err / 1000.0).sqrt(), $precision, correct_estimates);
                     assert!(correct_estimates > 800, "Too many incorrect estimates: {} out of 1000", 1000 - correct_estimates);
-                }                
+                }
             )*
         };
     }
@@ -128,7 +130,10 @@ use super::*;
         sketch2.add(5, 50.0);
         let union_sketch = sketch1.union(&sketch2);
         let estimate = union_sketch.estimate();
-        assert!(estimate > 130.0 && estimate < 170.0, "Union estimate is way off: {}", estimate);
+        assert!(
+            estimate > 130.0 && estimate < 170.0,
+            "Union estimate is way off: {}",
+            estimate
+        );
     }
-
 }
