@@ -1,11 +1,19 @@
 """A class that allows exploring heap dumps exported by dump_heap.py.
 It uses LMDB to store the data on disk and provides methods for querying objects, their types, and their relationships.
 """
-from summed_radix_tree import SummedRadixTree
+
+from enum import StrEnum
+
+from midden_analysis import (
+    LowPrecisionSizeSketch,
+    MediumPrecisionSizeSketch,
+    HighPrecisionSizeSketch,
+    SummedRadixTree,
+    SetMembershipSketch as SetSketch,
+)
 
 from midden.util.tarjan import GraphSCCVisitor, visit_sccs
 
-from midden.util.set_sketch import SetSketch
 
 from dataclasses import dataclass
 
@@ -19,6 +27,8 @@ from typing import (
     Callable,
     TypeVar,
     Iterable,
+    Protocol,
+    Self,
 )
 
 from pydantic import BaseModel, ConfigDict
@@ -168,6 +178,30 @@ def _wrap_txn(f: F, write=False) -> F:
 def txn() -> Transaction:
     """Get the current thread-local LMDB transaction."""
     return _tx_local.txn
+
+
+class SizeEstimator(Protocol):
+    def add(self, element: int, value: float) -> "Self": ...
+    def total(self) -> float: ...
+    def union(self, other: "Self") -> "Self": ...
+
+
+class Estimators(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    EXACT = "exact"
+
+
+ESTIMATORS = {
+    Estimators.LOW: LowPrecisionSizeSketch,
+    Estimators.MEDIUM: MediumPrecisionSizeSketch,
+    Estimators.HIGH: HighPrecisionSizeSketch,
+    Estimators.EXACT: SummedRadixTree,
+}
+
+
+SizeEstT = TypeVar("SizeEstT", bound=SizeEstimator)
 
 
 class HeapDumpExplorer:
@@ -447,10 +481,10 @@ class HeapDumpExplorer:
             t.cursor(db=self._type_summaries_db) as summaries_cursor,
             t.cursor(db=self._types_size_index_db) as types_cursor,
         ):
-
             last_key: bytes | None = None
             total_size = 0
             count = 0
+
             def _flush():
                 nonlocal last_key, total_size, count
                 if last_key is not None:
@@ -461,6 +495,7 @@ class HeapDumpExplorer:
                     last_key = None
                     total_size = 0
                     count = 0
+
             for type_key, size_value in types_cursor.iternext(keys=True, values=True):
                 assert isinstance(size_value, bytes) and isinstance(type_key, bytes)
                 if type_key != last_key:
@@ -482,7 +517,9 @@ class HeapDumpExplorer:
         """
         return link is None or link.type == "builtins.module"
 
-    def _explore_strongly_connected_components(outer_self):
+    def _explore_strongly_connected_components(
+        outer_self, size_estimator: Callable[[], SizeEstT] = MediumPrecisionSizeSketch
+    ):
         """Run Tarjan's algorithm to find strongly connected components (SCCs) in the object graph.
 
         This is used to calculate the subtree sizes for each object, as well as to build sketches
@@ -492,12 +529,13 @@ class HeapDumpExplorer:
 
         @dataclass(slots=True)
         class WalkResult:
-            subtree_size_radix_tree: SummedRadixTree
+            subtree_size_estimator: SizeEstT
             size: int
             scc_sketch: SetSketch
+
             @property
-            def subtree_size(self) -> int:
-                return self.subtree_size_radix_tree.total
+            def subtree_size(self) -> float:
+                return self.subtree_size_estimator.total()
 
         class ObjectGraphVisitor(
             GraphSCCVisitor[_ObjectRecordNoValue, int, int, WalkResult]
@@ -511,15 +549,17 @@ class HeapDumpExplorer:
             def accumulate_node_values(self, v1: int, v2: int) -> int:
                 # Sum node values (sizes) for SCC accumulation.
                 return v1 + v2
-            
-            def accumulate_scc_values(self, scc_acc: WalkResult, child_scc_acc: WalkResult) -> WalkResult:
+
+            def accumulate_scc_values(
+                self, scc_acc: WalkResult, child_scc_acc: WalkResult
+            ) -> WalkResult:
                 # Combine SCC values by summing subtree sizes and merging sketches.
-                combined_subtree_size_tree = scc_acc.subtree_size_radix_tree.union(
-                    child_scc_acc.subtree_size_radix_tree
+                combined_subtree_size_tree = scc_acc.subtree_size_estimator.union(
+                    child_scc_acc.subtree_size_estimator
                 )
                 combined_scc_sketch = scc_acc.scc_sketch.union(child_scc_acc.scc_sketch)
                 return WalkResult(
-                    subtree_size_radix_tree=combined_subtree_size_tree,
+                    subtree_size_estimator=combined_subtree_size_tree,
                     size=scc_acc.size,  # size of the current SCC doesn't change when combining with child SCCs
                     scc_sketch=combined_scc_sketch,
                 )
@@ -533,14 +573,16 @@ class HeapDumpExplorer:
                 # Combine node and child SCC values to compute subtree size and SCC sketch.
                 if scc_acc is None:
                     scc_acc = WalkResult(
-                        subtree_size_radix_tree=SummedRadixTree(),
+                        subtree_size_estimator=size_estimator(),
                         size=0,
                         scc_sketch=SetSketch(),
                     )
-                new_subtree_size_tree = scc_acc.subtree_size_radix_tree.add(this_scc, node_acc)
+                new_subtree_size_tree = scc_acc.subtree_size_estimator.add(
+                    this_scc, node_acc
+                )
                 new_scc_sketch = scc_acc.scc_sketch.add(this_scc)
                 return WalkResult(
-                    subtree_size_radix_tree=new_subtree_size_tree,
+                    subtree_size_estimator=new_subtree_size_tree,
                     size=node_acc,
                     scc_sketch=new_scc_sketch,
                 )
@@ -587,7 +629,7 @@ class HeapDumpExplorer:
                 # Store the computed subtree size and SCC sketch for this node.
                 record = outer_self._load_and_validate(node_id, _RawObjectRecord)
                 assert record is not None
-                record.subtree_size = scc_acc.subtree_size
+                record.subtree_size = int(scc_acc.subtree_size)
                 t.put(
                     _pack_id(node_id),
                     record.model_dump_json().encode(),
@@ -596,7 +638,7 @@ class HeapDumpExplorer:
                 outer_self._put_size_index_entry(
                     node_id,
                     record.type,
-                    scc_acc.subtree_size,
+                    int(scc_acc.subtree_size),
                     outer_self._types_subtree_size_index_db,
                 )
                 outer_self._put_sccs_sketch(node_id, scc_acc.scc_sketch)

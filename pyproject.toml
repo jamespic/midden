@@ -1,35 +1,12 @@
 [project]
-name = "midden"
+name = "midden-root"
 version = "0.1.0"
-description = "A simple heap analysis and visualization tool."
-readme = "README.md"
-authors = [
-    { name = "James Pickering", email = "james.pickering@airelogic.com" },
-]
 requires-python = ">=3.10"
-dependencies = []
-license = "MIT"
-
-[project.optional-dependencies]
-ui = [
-    "flask>=3.1.3",
-    "lmdb>=2.1.1",
-    "psutil>=7.2.2",
-    "pydantic>=2.12.5",
-    "xxhash>=3.6.0",
-    "summed-radix-tree",
-]
-
-[project.scripts]
-midden-inject = "midden.dump.inject:main"
-midden-ui = "midden.wsgi:main"
-
-[build-system]
-requires = ["uv_build>=0.9.22,<0.10.0"]
-build-backend = "uv_build"
-
-[dependency-groups]
-dev = ["pytest>=9.0.2", "ruff>=0.15.7", "ty>=0.0.24"]
+dependencies = ["midden", "midden-analysis"]
 
 [tool.uv.sources]
-summed-radix-tree = { path = "summed_radix_tree-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl" }
+midden = { workspace = true }
+midden-analysis = { workspace = true }
+
+[tool.uv.workspace]
+members = ["midden", "midden-analysis"]

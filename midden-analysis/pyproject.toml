@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.13,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "midden-analysis"
+requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+[dependency-groups]
+dev = [
+    "maturin-import-hook>=0.3.0",
+    "pytest>=8.3.5",
+]
