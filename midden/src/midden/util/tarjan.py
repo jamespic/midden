@@ -12,12 +12,6 @@ NodeT = TypeVar("NodeT")
 
 
 @dataclass(slots=True)
-class _StackEntry(Generic[NodeIdT, NodeAccT]):
-    id: NodeIdT
-    acc: NodeAccT
-
-
-@dataclass(slots=True)
 class _BookkeepingEntry:
     index: int
     lowlink: int
@@ -29,13 +23,6 @@ class _BookkeepingEntry:
 class _NodeInfo(Generic[NodeIdT, NodeAccT]):
     id: NodeIdT
     acc: NodeAccT
-
-
-class _EmptySentinel(Enum):
-    INSTANCE = 0
-
-
-_EMPTY_SENTINEL = _EmptySentinel.INSTANCE
 
 
 class GraphSCCVisitor(Generic[NodeT, NodeIdT, NodeAccT, SCCAccT]):
@@ -89,7 +76,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
     member of the SCC with the accumulated value for that SCC."""
 
     bookkeeping: dict[NodeIdT, _BookkeepingEntry] = {}
-    stack: list[_StackEntry[NodeIdT, NodeAccT]] = []
+    stack: list[NodeIdT] = []
     index = 0
     next_scc_index = 0
     scc_accs: dict[int, SCCAccT] = {}
@@ -98,13 +85,14 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
     def strongconnect(
         obj: NodeT,
     ) -> Generator[
-        SCCAccT, None, SCCAccT
+        tuple[NodeAccT|None, SCCAccT|None], None, tuple[NodeAccT|None, SCCAccT|None]
     ]:  # Returns set of SCCs that are children of this node
         nonlocal index, next_scc_index
         obj_id = visitor.get_node_id(obj)
         entry = _BookkeepingEntry(index=index, lowlink=index, on_stack=True)
         bookkeeping[obj_id] = entry
-        stack.append(_StackEntry(id=obj_id, acc=visitor.get_node_acc(obj)))
+        node_acc = visitor.get_node_acc(obj)
+        stack.append(obj_id)
         index += 1
         scc_acc: SCCAccT | None = None
         def _acc_scc(other: SCCAccT | None) -> None:
@@ -121,7 +109,9 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
             successor_id = visitor.get_node_id(successor)
             bookkeeping_entry = bookkeeping.get(successor_id)
             if bookkeeping_entry is None:
-                child_scc_acc = yield strongconnect(successor)
+                child_node_acc, child_scc_acc = yield strongconnect(successor)
+                if child_node_acc is not None:
+                    node_acc = visitor.accumulate_node_values(node_acc, child_node_acc)
                 _acc_scc(child_scc_acc)
                 entry.lowlink = min(entry.lowlink, bookkeeping[successor_id].lowlink)
             elif bookkeeping_entry.on_stack:
@@ -136,25 +126,18 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
             scc = next_scc_index
             next_scc_index += 1
 
-            acc: NodeAccT | _EmptySentinel = _EMPTY_SENTINEL
             scc_members: set[NodeIdT] = set()
             while True:
                 member = stack.pop()
-                scc_members.add(member.id)
-                acc = (
-                    member.acc
-                    if acc is _EMPTY_SENTINEL
-                    else visitor.accumulate_node_values(acc, member.acc)
-                )
-                bookkeeping_item = bookkeeping[member.id]
+                scc_members.add(member)
+                bookkeeping_item = bookkeeping[member]
                 bookkeeping_item.on_stack = False
                 bookkeeping_item.scc = scc
 
-                if member.id == obj_id:
+                if member == obj_id:
                     break
-            assert acc is not _EMPTY_SENTINEL
             scc_acc = visitor.add_node_value_to_scc_value(
-                acc,
+                node_acc,
                 scc,
                 scc_acc
             )
@@ -162,8 +145,9 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
 
             for member_id in scc_members:
                 visitor.emit_result(member_id, scc_acc)
+            node_acc = None  # Node accumulators only accumulate within SCCs. Propagate none to parent SCCs, since they shouldn't be used there.
 
-        return scc_acc
+        return node_acc, scc_acc
 
     for obj in visitor.iterate_nodes(bookkeeping.__contains__):
         obj_id = visitor.get_node_id(obj)
