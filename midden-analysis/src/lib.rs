@@ -132,137 +132,64 @@ mod midden_analysis {
         }
     }
 
-    // FIXME: Figure out why macros weren't working for this, and then DRY this up.
-    #[pyclass]
-    struct LowPrecisionSizeSketch(InnerLowPrecisionSizeSketch);
+    macro_rules! impl_size_sketch {
+        ($name:ident, $inner:ty) => {
+            #[::pyo3::pyclass]
+            struct $name($inner);
 
-    #[pymethods]
-    impl LowPrecisionSizeSketch {
-        #[new]
-        fn new() -> Self {
-            Self(InnerLowPrecisionSizeSketch::new())
-        }
+            #[::pyo3::pymethods]
+            impl $name {
+                #[new]
+                fn new() -> Self {
+                    Self(<$inner>::new())
+                }
 
-        fn add<'a>(
-            slf: Bound<'a, Self>,
-            id: Bound<'_, PyAny>,
-            value: f64,
-        ) -> PyResult<Bound<'a, Self>> {
-            slf.borrow_mut().0.add(id.hash()?, value);
-            Ok(slf)
-        }
+                fn add<'a>(
+                    slf: Bound<'a, Self>,
+                    id: Bound<'_, PyAny>,
+                    value: f64,
+                ) -> PyResult<Bound<'a, Self>> {
+                    slf.borrow_mut().0.add(id.hash()?, value);
+                    Ok(slf)
+                }
 
-        fn union(&self, other: &LowPrecisionSizeSketch) -> Self {
-            Self(self.0.union(&other.0))
-        }
+                fn union(&self, other: &$name) -> Self {
+                    Self(self.0.union(&other.0))
+                }
 
-        fn total(&self) -> f64 {
-            self.0.estimate()
-        }
+                fn total(&self) -> f64 {
+                    self.0.estimate()
+                }
 
-        fn __or__(&self, other: &LowPrecisionSizeSketch) -> Self {
-            self.union(other)
-        }
+                fn __or__(&self, other: &$name) -> Self {
+                    self.union(other)
+                }
 
-        fn __str__(&self) -> String {
-            format!("LowPrecisionSizeSketch({:?})", self.0.estimate())
-        }
+                fn __str__(&self) -> String {
+                    format!("{}({:?})", stringify!($name), self.0.estimate())
+                }
 
-        fn __repr__(&self) -> String {
-            self.__str__()
-        }
+                fn __repr__(&self) -> String {
+                    self.__str__()
+                }
 
-        fn __sizeof__(&self) -> usize {
-            size_of::<Self>()
-        }
+                fn __sizeof__(&self) -> usize {
+                    size_of::<Self>()
+                }
+            }
+        };
     }
+    impl_size_sketch!(LowPrecisionSizeSketch, InnerLowPrecisionSizeSketch);
+    impl_size_sketch!(MediumPrecisionSizeSketch, InnerMediumPrecisionSizeSketch);
+    impl_size_sketch!(HighPrecisionSizeSketch, InnerHighPrecisionSizeSketch);
 
-    #[pyclass]
-    struct MediumPrecisionSizeSketch(InnerMediumPrecisionSizeSketch);
-
-    #[pymethods]
-    impl MediumPrecisionSizeSketch {
-        #[new]
-        fn new() -> Self {
-            Self(InnerMediumPrecisionSizeSketch::new())
-        }
-
-        fn add<'a>(
-            slf: Bound<'a, Self>,
-            id: Bound<'_, PyAny>,
-            value: f64,
-        ) -> PyResult<Bound<'a, Self>> {
-            slf.borrow_mut().0.add(id.hash()?, value);
-            Ok(slf)
-        }
-
-        fn union(&self, other: &MediumPrecisionSizeSketch) -> Self {
-            Self(self.0.union(&other.0))
-        }
-
-        fn total(&self) -> f64 {
-            self.0.estimate()
-        }
-
-        fn __or__(&self, other: &MediumPrecisionSizeSketch) -> Self {
-            self.union(other)
-        }
-
-        fn __str__(&self) -> String {
-            format!("MediumPrecisionSizeSketch({:?})", self.0.estimate())
-        }
-
-        fn __repr__(&self) -> String {
-            self.__str__()
-        }
-
-        fn __sizeof__(&self) -> usize {
-            size_of::<Self>()
-        }
-    }
-
-    #[pyclass]
-    struct HighPrecisionSizeSketch(InnerHighPrecisionSizeSketch);
-
-    #[pymethods]
-    impl HighPrecisionSizeSketch {
-        #[new]
-        fn new() -> Self {
-            Self(InnerHighPrecisionSizeSketch::new())
-        }
-
-        fn add<'a>(
-            slf: Bound<'a, Self>,
-            id: Bound<'_, PyAny>,
-            value: f64,
-        ) -> PyResult<Bound<'a, Self>> {
-            slf.borrow_mut().0.add(id.hash()?, value);
-            Ok(slf)
-        }
-
-        fn union(&self, other: &HighPrecisionSizeSketch) -> Self {
-            Self(self.0.union(&other.0))
-        }
-
-        fn total(&self) -> f64 {
-            self.0.estimate()
-        }
-
-        fn __or__(&self, other: &HighPrecisionSizeSketch) -> Self {
-            self.union(other)
-        }
-
-        fn __str__(&self) -> String {
-            format!("HighPrecisionSizeSketch({:?})", self.0.estimate())
-        }
-
-        fn __repr__(&self) -> String {
-            self.__str__()
-        }
-
-        fn __sizeof__(&self) -> usize {
-            size_of::<Self>()
-        }
+    #[pymodule_init]
+    fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
+        // Initialize macro-generated classes that #[pymodule can't see]
+        m.add_class::<LowPrecisionSizeSketch>()?;
+        m.add_class::<MediumPrecisionSizeSketch>()?;
+        m.add_class::<HighPrecisionSizeSketch>()?;
+        Ok(())
     }
 
     #[pyclass]

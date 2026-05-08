@@ -81,7 +81,13 @@ impl SummedRadixTree {
         match (self.as_ref(), other.as_ref()) {
             (Self::Empty, _) => other.clone(),
             (_, Self::Empty) => self.clone(),
-            (s, o) if s.unique_hash() == o.unique_hash() => self.clone(),
+            (s, o) if s.unique_hash() == o.unique_hash() => {
+                if Arc::strong_count(self) >= Arc::strong_count(other) {
+                    self.clone()
+                } else {
+                    other.clone()
+                }
+            }
             (Self::Leaf { .. }, Self::Branch { .. }) => {
                 other.union(self) // Let the bigger tree handle merging
             }
