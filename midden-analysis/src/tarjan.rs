@@ -17,8 +17,8 @@ pub trait GraphSCCVisitor {
     fn get_node_id(&self, node: &Self::NodeT) -> Self::NodeIdT;
     fn get_node_acc(&self, node: &Self::NodeT) -> Self::NodeAccT;
     fn get_successors(&self, node: &Self::NodeT) -> Vec<Self::NodeT>;
-    fn accumulate_node_values(&self, v1: &Self::NodeAccT, v2: &Self::NodeAccT) -> Self::NodeAccT;
-    fn accumulate_scc_values(&self, v1: &Self::SCCAccT, v2: &Self::SCCAccT) -> Self::SCCAccT;
+    fn accumulate_node_values(&self, v1: &mut Self::NodeAccT, v2: &Self::NodeAccT);
+    fn accumulate_scc_values(&self, v1: &mut Self::SCCAccT, v2: &Self::SCCAccT);
     fn add_node_value_to_scc_value(
         &self,
         node_acc: &Self::NodeAccT,
@@ -33,13 +33,15 @@ pub trait GraphSCCVisitor {
     );
     fn _acc_scc_options(
         &self,
-        scc_acc1: Option<&Self::SCCAccT>,
+        mut scc_acc1: &mut Option<Self::SCCAccT>,
         scc_acc2: Option<&Self::SCCAccT>,
-    ) -> Option<Self::SCCAccT> {
-        match (scc_acc1, scc_acc2) {
-            (None, None) => None,
-            (Some(acc), None) | (None, Some(acc)) => Some(acc.clone()),
-            (Some(acc1), Some(acc2)) => Some(self.accumulate_scc_values(acc1, acc2)),
+    ) {
+        match (&mut scc_acc1, &scc_acc2) {
+            (None, None)|(Some(..), None) => (),
+            (None, Some(acc)) => *scc_acc1 = Some((*acc).clone()),
+            (Some(acc1), Some(acc2)) => {
+                self.accumulate_scc_values(acc1, acc2);
+            }
         }
     }
 }
@@ -140,8 +142,7 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) {
                             } else {
                                 let linked_scc = successor_entry.scc.unwrap();
                                 let linked_scc_acc = &state.scc_accs[&linked_scc];
-                                frame.scc_acc = visitor
-                                    ._acc_scc_options(frame.scc_acc.as_ref(), Some(linked_scc_acc));
+                                visitor._acc_scc_options(&mut frame.scc_acc, Some(linked_scc_acc));
                             }
                             state.call_stack.push(frame);
                         }
@@ -158,11 +159,9 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) {
                     ref child_scc_acc,
                 } => {
                     if let Some(child_node_acc) = child_node_acc {
-                        frame.node_acc =
-                            visitor.accumulate_node_values(&frame.node_acc, &child_node_acc);
+                        visitor.accumulate_node_values(&mut frame.node_acc, &child_node_acc);
                     }
-                    frame.scc_acc =
-                        visitor._acc_scc_options(frame.scc_acc.as_ref(), child_scc_acc.as_ref());
+                    visitor._acc_scc_options(&mut frame.scc_acc, child_scc_acc.as_ref());
 
                     let successor_id = frame.current_successor_id.unwrap();
                     let successor_lowlink = state.bookkeeping[&successor_id].lowlink;
@@ -290,15 +289,16 @@ mod tests {
 
         fn accumulate_node_values(
             &self,
-            v1: &Self::NodeAccT,
+            v1: &mut Self::NodeAccT,
             v2: &Self::NodeAccT,
-        ) -> Self::NodeAccT {
-            v1.iter().chain(v2.iter()).cloned().collect()
+        ) {
+            v1.extend(v2.iter().cloned());
         }
 
-        fn accumulate_scc_values(&self, v1: &Self::SCCAccT, v2: &Self::SCCAccT) -> Self::SCCAccT {
-            v1.iter().chain(v2.iter()).cloned().collect()
+        fn accumulate_scc_values(&self, v1: &mut Self::SCCAccT, v2: &Self::SCCAccT) {
+            v1.extend(v2.iter().cloned());
         }
+        
         fn add_node_value_to_scc_value(
             &self,
             node_acc: &Self::NodeAccT,
