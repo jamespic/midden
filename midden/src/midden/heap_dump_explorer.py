@@ -530,7 +530,6 @@ class HeapDumpExplorer:
         @dataclass(slots=True)
         class WalkResult:
             subtree_size_estimator: SizeEstT
-            size: int
             scc_sketch: SetSketch
 
             @property
@@ -560,7 +559,6 @@ class HeapDumpExplorer:
                 combined_scc_sketch = scc_acc.scc_sketch.union(child_scc_acc.scc_sketch)
                 return WalkResult(
                     subtree_size_estimator=combined_subtree_size_tree,
-                    size=scc_acc.size,  # size of the current SCC doesn't change when combining with child SCCs
                     scc_sketch=combined_scc_sketch,
                 )
 
@@ -574,7 +572,6 @@ class HeapDumpExplorer:
                 if scc_acc is None:
                     scc_acc = WalkResult(
                         subtree_size_estimator=size_estimator(),
-                        size=0,
                         scc_sketch=SetSketch(),
                     )
                 new_subtree_size_tree = scc_acc.subtree_size_estimator.add(
@@ -583,7 +580,6 @@ class HeapDumpExplorer:
                 new_scc_sketch = scc_acc.scc_sketch.add(this_scc)
                 return WalkResult(
                     subtree_size_estimator=new_subtree_size_tree,
-                    size=node_acc,
                     scc_sketch=new_scc_sketch,
                 )
 

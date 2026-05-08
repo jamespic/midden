@@ -3,6 +3,7 @@ use pyo3::prelude::*;
 mod set_membership_sketch;
 mod size_sketch;
 mod summed_radix_tree;
+mod tarjan;
 /// A Python module implemented in Rust.
 #[pymodule]
 mod midden_analysis {

@@ -1,5 +1,3 @@
-from re import S
-from enum import Enum
 from midden.util.long_stack import run_with_long_stack
 from collections.abc import Generator, Callable
 from typing import TypeVar, Generic, Iterable
@@ -17,12 +15,6 @@ class _BookkeepingEntry:
     lowlink: int
     on_stack: bool
     scc: int | None = None
-
-
-@dataclass(slots=True)
-class _NodeInfo(Generic[NodeIdT, NodeAccT]):
-    id: NodeIdT
-    acc: NodeAccT
 
 
 class GraphSCCVisitor(Generic[NodeT, NodeIdT, NodeAccT, SCCAccT]):
@@ -52,7 +44,9 @@ class GraphSCCVisitor(Generic[NodeT, NodeIdT, NodeAccT, SCCAccT]):
         """Override this to define how to accumulate two node values. This is used to combine values of nodes in the same SCC."""
         raise NotImplementedError
 
-    def accumulate_scc_values(self, scc_acc: SCCAccT, child_scc_acc: SCCAccT) -> SCCAccT:
+    def accumulate_scc_values(
+        self, scc_acc: SCCAccT, child_scc_acc: SCCAccT
+    ) -> SCCAccT:
         """Override this to define how to accumulate values of child SCCs into a parent SCC value."""
         raise NotImplementedError
 
@@ -80,12 +74,13 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
     index = 0
     next_scc_index = 0
     scc_accs: dict[int, SCCAccT] = {}
-    
 
     def strongconnect(
         obj: NodeT,
     ) -> Generator[
-        tuple[NodeAccT|None, SCCAccT|None], None, tuple[NodeAccT|None, SCCAccT|None]
+        tuple[NodeAccT | None, SCCAccT | None],
+        None,
+        tuple[NodeAccT | None, SCCAccT | None],
     ]:  # Returns set of SCCs that are children of this node
         nonlocal index, next_scc_index
         obj_id = visitor.get_node_id(obj)
@@ -95,6 +90,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
         stack.append(obj_id)
         index += 1
         scc_acc: SCCAccT | None = None
+
         def _acc_scc(other: SCCAccT | None) -> None:
             nonlocal scc_acc
             if scc_acc is None:
@@ -136,11 +132,7 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
 
                 if member == obj_id:
                     break
-            scc_acc = visitor.add_node_value_to_scc_value(
-                node_acc,
-                scc,
-                scc_acc
-            )
+            scc_acc = visitor.add_node_value_to_scc_value(node_acc, scc, scc_acc)
             scc_accs[scc] = scc_acc
 
             for member_id in scc_members:
@@ -150,6 +142,4 @@ def visit_sccs(visitor: GraphSCCVisitor[NodeT, NodeIdT, NodeAccT, SCCAccT]) -> N
         return node_acc, scc_acc
 
     for obj in visitor.iterate_nodes(bookkeeping.__contains__):
-        obj_id = visitor.get_node_id(obj)
-        if obj_id not in bookkeeping:
-            run_with_long_stack(strongconnect(obj))
+        run_with_long_stack(strongconnect(obj))
