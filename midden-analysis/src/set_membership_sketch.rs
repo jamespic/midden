@@ -1,6 +1,6 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetMembershipSketch<const N: usize> {
     registers: [u32; N],
 }
@@ -30,6 +30,12 @@ impl<const N: usize> SetMembershipSketch<N> {
             result.registers[i] = self.registers[i].min(other.registers[i]);
         }
         result
+    }
+
+    pub fn include(&mut self, other: &Self) {
+        for i in 0..N {
+            self.registers[i] = self.registers[i].min(other.registers[i]);
+        }
     }
 
     pub fn is_subset_of(&self, other: &Self) -> bool {

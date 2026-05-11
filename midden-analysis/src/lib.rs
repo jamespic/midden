@@ -4,6 +4,7 @@ mod set_membership_sketch;
 mod size_sketch;
 mod summed_radix_tree;
 mod tarjan;
+mod heap_dump_explorer;
 /// A Python module implemented in Rust.
 #[pymodule]
 mod midden_analysis {

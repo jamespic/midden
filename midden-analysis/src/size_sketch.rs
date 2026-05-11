@@ -2,6 +2,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use float16::Bf16;
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct SizeSketch<const N: usize> {
     /** A sum-distinct sketch for estimating the size of a multiset */
     /* The key observation that powers this sketch is that if we have exponential random variables
@@ -53,6 +54,12 @@ impl<const N: usize> SizeSketch<N> {
             result.values[i] = self.values[i].max(other.values[i]);
         }
         result
+    }
+
+    pub fn update_in_place(&mut self, other: &Self) {
+        for i in 0..N {
+            self.values[i] = self.values[i].max(other.values[i]);
+        }
     }
 
     pub fn estimate(&self) -> f64 {

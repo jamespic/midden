@@ -1,22 +1,20 @@
 use core::panic;
-use std::{
-    cmp::min, collections::HashMap, hash::Hash,
-    vec::IntoIter,
-};
+use std::{cmp::min, collections::HashMap, hash::Hash, vec::IntoIter};
 
 pub trait GraphSCCVisitor {
     type NodeT;
     type NodeIdT: Eq + Hash + Copy;
     type NodeAccT: Clone;
     type SCCAccT: Clone;
+    type ErrorT;
 
     fn next_unvisited_node(
         &mut self,
         already_visited: impl FnMut(&Self::NodeIdT) -> bool,
-    ) -> Option<Self::NodeT>;
+    ) -> Result<Option<Self::NodeT>, Self::ErrorT>;
     fn get_node_id(&self, node: &Self::NodeT) -> Self::NodeIdT;
     fn get_node_acc(&self, node: &Self::NodeT) -> Self::NodeAccT;
-    fn get_successors(&self, node: &Self::NodeT) -> Vec<Self::NodeT>;
+    fn get_successors(&self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT>;
     fn accumulate_node_values(&self, v1: &mut Self::NodeAccT, v2: &Self::NodeAccT);
     fn accumulate_scc_values(&self, v1: &mut Self::SCCAccT, v2: &Self::SCCAccT);
     fn add_node_value_to_scc_value(
@@ -30,14 +28,14 @@ pub trait GraphSCCVisitor {
         node_id: Self::NodeIdT,
         node_acc_this_scc: Self::NodeAccT,
         scc_acc: Self::SCCAccT,
-    );
+    ) -> Result<(), Self::ErrorT>;
     fn _acc_scc_options(
         &self,
         mut scc_acc1: &mut Option<Self::SCCAccT>,
         scc_acc2: Option<&Self::SCCAccT>,
     ) {
         match (&mut scc_acc1, &scc_acc2) {
-            (None, None)|(Some(..), None) => (),
+            (None, None) | (Some(..), None) => (),
             (None, Some(acc)) => *scc_acc1 = Some((*acc).clone()),
             (Some(acc1), Some(acc2)) => {
                 self.accumulate_scc_values(acc1, acc2);
@@ -82,7 +80,7 @@ struct CallStackFrame<V: GraphSCCVisitor> {
 }
 
 impl<V: GraphSCCVisitor> TarjanState<V> {
-    fn push_new_frame(&mut self, visitor: &V, node: V::NodeT) {
+    fn push_new_frame(&mut self, visitor: &V, node: V::NodeT) -> Result<(), V::ErrorT> {
         let node_index = self.index;
         self.index += 1;
         let node_id = visitor.get_node_id(&node);
@@ -94,7 +92,7 @@ impl<V: GraphSCCVisitor> TarjanState<V> {
         };
         self.bookkeeping.insert(node_id, entry);
         let node_acc = visitor.get_node_acc(&node);
-        let successors = visitor.get_successors(&node);
+        let successors = visitor.get_successors(&node)?;
         let frame = CallStackFrame {
             state: CallStackFrameState::NextIteration,
             obj_id: node_id,
@@ -105,10 +103,11 @@ impl<V: GraphSCCVisitor> TarjanState<V> {
         };
         self.stack.push(frame.obj_id);
         self.call_stack.push(frame);
+        Ok(())
     }
 }
 
-pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) {
+pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) -> Result<(), V::ErrorT> {
     let mut state: TarjanState<V> = TarjanState {
         bookkeeping: HashMap::new(),
         call_stack: Vec::new(),
@@ -129,7 +128,7 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) {
                         if !state.bookkeeping.contains_key(&successor_id) {
                             frame.state = CallStackFrameState::ChildWait;
                             state.call_stack.push(frame);
-                            state.push_new_frame(&visitor, successor);
+                            state.push_new_frame(&visitor, successor)?;
                         } else {
                             let successor_entry = &state.bookkeeping[&successor_id];
                             if successor_entry.on_stack {
@@ -202,7 +201,7 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) {
                                 member_id,
                                 frame.node_acc.clone(),
                                 frame.scc_acc.clone().unwrap(),
-                            );
+                            )?;
                         }
                         None
                         //     return node_acc, scc_acc
@@ -219,14 +218,14 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) {
                 }
             }
         } else {
-            let next_node = visitor.next_unvisited_node(|id| state.bookkeeping.contains_key(id));
+            let next_node = visitor.next_unvisited_node(|id| state.bookkeeping.contains_key(id))?;
             if let Some(node) = next_node {
                 // Handle dodgy iterator implementations that might return the same node multiple times
                 if !state.bookkeeping.contains_key(&visitor.get_node_id(&node)) {
-                    state.push_new_frame(&visitor, node); // Handle dodgy iterator implementations that might return the same node multiple times
+                    state.push_new_frame(&visitor, node)?; // Handle dodgy iterator implementations that might return the same node multiple times
                 }
             } else {
-                break;
+                return Ok(());
             }
         }
     }
@@ -234,7 +233,10 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::{HashSet, hash_map::Iter as HashMapIter}};
+    use std::{
+        collections::{HashSet, hash_map::Iter as HashMapIter},
+        convert::Infallible,
+    };
 
     use super::*;
 
@@ -260,11 +262,12 @@ mod tests {
         type NodeIdT = u64;
         type NodeAccT = HashSet<u64>;
         type SCCAccT = HashSet<u64>;
+        type ErrorT = Infallible;
 
         fn next_unvisited_node(
             &mut self,
             mut already_visited: impl FnMut(&Self::NodeIdT) -> bool,
-        ) -> Option<Self::NodeT> {
+        ) -> Result<Option<Self::NodeT>, Self::ErrorT> {
             let mut result = None;
             for (node_id, _) in self.iterator.by_ref() {
                 if !already_visited(node_id) {
@@ -272,7 +275,7 @@ mod tests {
                     break;
                 }
             }
-            result
+            Ok(result)
         }
 
         fn get_node_id(&self, node: &Self::NodeT) -> Self::NodeIdT {
@@ -283,22 +286,18 @@ mod tests {
             HashSet::from([*node])
         }
 
-        fn get_successors(&self, node: &Self::NodeT) -> Vec<Self::NodeT> {
-            self.graph[&node].clone()
+        fn get_successors(&self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT> {
+            Ok(self.graph[&node].clone())
         }
 
-        fn accumulate_node_values(
-            &self,
-            v1: &mut Self::NodeAccT,
-            v2: &Self::NodeAccT,
-        ) {
+        fn accumulate_node_values(&self, v1: &mut Self::NodeAccT, v2: &Self::NodeAccT) {
             v1.extend(v2.iter().cloned());
         }
 
         fn accumulate_scc_values(&self, v1: &mut Self::SCCAccT, v2: &Self::SCCAccT) {
             v1.extend(v2.iter().cloned());
         }
-        
+
         fn add_node_value_to_scc_value(
             &self,
             node_acc: &Self::NodeAccT,
@@ -317,9 +316,10 @@ mod tests {
             node_id: Self::NodeIdT,
             node_acc_this_scc: Self::NodeAccT,
             scc_acc: Self::SCCAccT,
-        ) {
+        ) -> Result<(), Self::ErrorT> {
             self.results
                 .insert(node_id, (node_acc_this_scc.clone(), scc_acc.clone()));
+            Ok(())
         }
     }
 
@@ -341,7 +341,7 @@ mod tests {
         .cloned()
         .collect();
         let mut visitor = TestVisitor::new(&test_graph);
-        visit_sccs(&mut visitor);
+        visit_sccs(&mut visitor).unwrap();
         assert_eq!(
             visitor.results,
             [
