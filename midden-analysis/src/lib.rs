@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 
 mod heap_dump_explorer;
-mod set_membership_sketch;
 mod size_sketch;
 mod summed_radix_tree;
 mod tarjan;
@@ -10,7 +9,6 @@ mod tarjan;
 mod midden_analysis {
     use std::sync::Arc;
 
-    use crate::set_membership_sketch::DefaultMembershipSketch;
     use crate::size_sketch::{
         HighPrecisionSizeSketch as InnerHighPrecisionSizeSketch,
         LowPrecisionSizeSketch as InnerLowPrecisionSizeSketch,
@@ -197,82 +195,6 @@ mod midden_analysis {
         m.add_class::<MediumPrecisionSizeSketch>()?;
         m.add_class::<HighPrecisionSizeSketch>()?;
         Ok(())
-    }
-
-    #[pyclass]
-    struct SetMembershipSketch(DefaultMembershipSketch);
-
-    #[pymethods]
-    impl SetMembershipSketch {
-        #[new]
-        fn new() -> Self {
-            Self(DefaultMembershipSketch::new())
-        }
-
-        fn add<'a>(slf: Bound<'a, Self>, item: &Bound<'_, PyAny>) -> PyResult<Bound<'a, Self>> {
-            slf.borrow_mut().0.add(&(item.hash()?));
-            Ok(slf)
-        }
-
-        fn add_all<'a>(
-            slf: Bound<'a, Self>,
-            items: &Bound<'_, PyAny>,
-        ) -> PyResult<Bound<'a, Self>> {
-            let items: Vec<Bound<'_, PyAny>> = items.extract()?;
-            for item in items {
-                slf.borrow_mut().0.add(&(item.hash()?));
-            }
-            Ok(slf)
-        }
-
-        fn union(&self, other: &SetMembershipSketch) -> Self {
-            Self(self.0.union(&other.0))
-        }
-
-        fn is_subset_of(&self, other: &SetMembershipSketch) -> bool {
-            self.0.is_subset_of(&other.0)
-        }
-
-        fn is_empty(&self) -> bool {
-            self.0.is_empty()
-        }
-
-        fn __or__(&self, other: &SetMembershipSketch) -> Self {
-            self.union(other)
-        }
-
-        fn __str__(&self) -> String {
-            format!(
-                "SetMembershipSketch.from_bytes([{}])",
-                self.0
-                    .to_bytes()
-                    .iter()
-                    .map(|b| b.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
-
-        fn __repr__(&self) -> String {
-            self.__str__()
-        }
-
-        fn __bool__(&self) -> bool {
-            !self.is_empty()
-        }
-
-        fn __sizeof__(&self) -> usize {
-            size_of::<Self>()
-        }
-
-        fn to_bytes(&self) -> Vec<u8> {
-            self.0.to_bytes()
-        }
-
-        #[staticmethod]
-        fn from_bytes(bytes: &[u8]) -> Self {
-            Self(DefaultMembershipSketch::from_bytes(bytes))
-        }
     }
 
     #[cfg(test)]

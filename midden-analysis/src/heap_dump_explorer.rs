@@ -19,7 +19,6 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    set_membership_sketch::{DefaultMembershipSketch, SetMembershipSketch},
     size_sketch::{
         HighPrecisionSizeSketch, LowPrecisionSizeSketch, MediumPrecisionSizeSketch, SizeSketch,
     },
@@ -164,7 +163,6 @@ const TYPES_DB: &str = "types";
 const TYPES_SIZE_INDEX_DB: &str = "types_size_index";
 const TYPES_SUBTREE_SIZE_INDEX_DB: &str = "types_subtree_size_index";
 const TYPE_SUMMARIES_DB: &str = "type_summaries";
-const SCCS_SKETCH_DB: &str = "sccs_sketch";
 const ALL_TYPES: &str = "All Types";
 const PAGE_SIZE: usize = 1000; // Hardcode this for now
 
@@ -211,30 +209,6 @@ impl SizeEstimator for Arc<SummedRadixTree> {
 
     fn include(&mut self, other: &Self) {
         *self = self.union(other);
-    }
-}
-
-impl<const N: usize> BytesEncode<'_> for SetMembershipSketch<N> {
-    type EItem = Self;
-
-    fn bytes_encode(item: &Self) -> Result<Cow<'_, [u8]>, Box<dyn Error + Send + Sync>> {
-        Ok(Cow::Owned(item.to_bytes().to_vec()))
-    }
-}
-
-impl<const N: usize> BytesDecode<'_> for SetMembershipSketch<N> {
-    type DItem = Self;
-
-    fn bytes_decode(bytes: &[u8]) -> Result<Self::DItem, Box<dyn Error + Send + Sync>> {
-        Ok(SetMembershipSketch::from_bytes(bytes.try_into().map_err(
-            |_| {
-                format!(
-                    "Invalid byte length for SetMembershipSketch: expected {}, got {}",
-                    4 * N,
-                    bytes.len()
-                )
-            },
-        )?))
     }
 }
 
@@ -316,7 +290,6 @@ pub struct HeapDumpExplorer {
     types_size_index_db: Database<Type, SizeIndexEntry>,
     types_subtree_size_index_db: Database<Type, SizeIndexEntry>,
     type_summaries_db: Database<Type, TypeSummary>,
-    sccs_sketch_db: Database<IdDbType, DefaultMembershipSketch, IntegerComparator>,
 }
 
 trait RollbackOnErr {
@@ -499,14 +472,6 @@ impl HeapDumpExplorer {
             })
         })
     }
-
-    fn _get_scc_sketch(
-        &self,
-        tx: &heed::RoTxn,
-        id: Id,
-    ) -> anyhow::Result<Option<DefaultMembershipSketch>> {
-        Ok(self.sccs_sketch_db.get(tx, &id)?)
-    }
 }
 
 #[pymethods]
@@ -556,12 +521,6 @@ impl HeapDumpExplorer {
             .name(TYPE_SUMMARIES_DB)
             .types()
             .create(&mut wtxn)?;
-        let sccs_sketch_db = env
-            .database_options()
-            .name(SCCS_SKETCH_DB)
-            .types()
-            .key_comparator()
-            .create(&mut wtxn)?;
         wtxn.commit()?;
 
         return Ok(Self {
@@ -572,7 +531,6 @@ impl HeapDumpExplorer {
             types_size_index_db,
             types_subtree_size_index_db,
             type_summaries_db,
-            sccs_sketch_db,
         });
     }
 
@@ -683,13 +641,6 @@ impl HeapDumpExplorer {
         let mut predecessors = HashMap::new();
         predecessors.insert(start_id, None); // Doubles as a visited set
         let mut dead_ends = HashSet::new();
-        let start_sketch = self._get_scc_sketch(&rtxn, start_id)?;
-        let end_sketch = self._get_scc_sketch(&rtxn, end_id)?;
-        if let (Some(end_sketch), Some(start_sketch)) = (&end_sketch, &start_sketch) {
-            if !end_sketch.is_subset_of(&start_sketch) {
-                return Ok(None); // No path can exist if end's reachable SCCs aren't a subset of start's reachable SCCs
-            }
-        };
         while let Some(current_id) = queue.pop_front() {
             if current_id == end_id {
                 // Reconstruct path
@@ -704,14 +655,6 @@ impl HeapDumpExplorer {
             }
             if dead_ends.contains(&current_id) {
                 continue; // Skip known dead ends
-            }
-            if let Some(current_sketch) = self._get_scc_sketch(&rtxn, current_id)? {
-                if let Some(end_sketch) = &end_sketch {
-                    if !end_sketch.is_subset_of(&current_sketch) {
-                        dead_ends.insert(current_id);
-                        continue; // No path can exist from current to end, so skip it
-                    }
-                }
             }
 
             let object_record = remapped_db.get(&rtxn, &current_id)?.ok_or_else(|| {
@@ -756,19 +699,13 @@ fn should_skip_link_in_subtree_exploration(record: &ObjectRecordNoValue) -> bool
     record.r#type == "builtins.module"
 }
 
-#[derive(Debug, Clone)]
-struct VisitorState<SizeEstimatorT> {
-    scc_sketch: DefaultMembershipSketch,
-    size_estimate: SizeEstimatorT,
-}
-
 impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
     for StronglyConnectedComponentsVisitor<'vis, 'env, T>
 {
     type NodeT = ObjectRecordNoValue;
     type NodeIdT = Id;
     type NodeAccT = usize;
-    type SCCAccT = VisitorState<T>;
+    type SCCAccT = T;
     type ErrorT = HeedError;
 
     fn next_unvisited_node(
@@ -822,8 +759,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
     }
 
     fn accumulate_scc_values(&self, v1: &mut Self::SCCAccT, v2: &Self::SCCAccT) {
-        v1.size_estimate.include(&v2.size_estimate);
-        v1.scc_sketch.include(&v2.scc_sketch);
+        v1.include(v2);
     }
 
     fn add_node_value_to_scc_value(
@@ -832,14 +768,8 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         this_scc: usize,
         scc_acc: Option<&Self::SCCAccT>,
     ) -> Self::SCCAccT {
-        let mut scc_acc = scc_acc.cloned().unwrap_or_else(|| VisitorState {
-            scc_sketch: DefaultMembershipSketch::new(),
-            size_estimate: T::empty(),
-        });
-        scc_acc
-            .size_estimate
-            .add_in_place(this_scc as u64, *node_acc as u64);
-        scc_acc.scc_sketch.add(&this_scc);
+        let mut scc_acc = scc_acc.cloned().unwrap_or_else(|| T::empty());
+        scc_acc.add_in_place(this_scc as u64, *node_acc as u64);
         scc_acc
     }
 
@@ -849,9 +779,6 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         _node_acc_this_scc: Self::NodeAccT,
         scc_acc: Self::SCCAccT,
     ) -> Result<(), Self::ErrorT> {
-        self.explorer
-            .sccs_sketch_db
-            .put(&mut self.rw_txn, &node_id, &scc_acc.scc_sketch)?;
         let mut record = self
             .explorer
             .primary_db
@@ -859,7 +786,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
             .ok_or_else(|| {
                 HeedError::Decoding(format!("Missing record for node ID {}", node_id).into())
             })?;
-        let subtree_size = scc_acc.size_estimate.total();
+        let subtree_size = scc_acc.total();
         record.subtree_size = Some(subtree_size);
         self.explorer
             .primary_db
