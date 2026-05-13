@@ -1,12 +1,16 @@
 """A simple Flask GUI, with templated HTML with very basic styling, that lets the user explore a heap dump created by dump_heap.py."""
+import webbrowser
 
 import shutil
+
+import argparse
 
 from werkzeug.exceptions import NotFound
 from ntpath import basename
 import os
 import pathlib
 
+from cheroot.wsgi import Server as WSGIServer
 from flask import Flask, request, redirect, url_for, render_template, session
 from midden_analysis import HeapDumpExplorer, TypeSummary, EstimatorPrecision
 
@@ -180,8 +184,24 @@ def create_app():
 
 
 def main():
+    arg_parser = argparse.ArgumentParser(description="Run the Midden web server")
+    arg_parser.add_argument(
+        "--host", default="127.0.0.1"
+    )
+    arg_parser.add_argument(
+        "--port", default=5000, type=int
+    )
+    arg_parser.add_argument(
+        "--no-start-web-browser", action="store_false", dest="start_web_browser", help="Don't automatically open the web browser"
+    )
+    args = arg_parser.parse_args()
     app = create_app()
-    app.run()
+    url = f"http://{args.host}:{args.port}"
+    print(f"Starting Midden web server on {url}")
+    server = WSGIServer((args.host, args.port), app)
+    if args.start_web_browser:
+        webbrowser.open(url)
+    server.start()
 
 
 if __name__ == "__main__":

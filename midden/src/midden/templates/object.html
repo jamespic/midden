@@ -31,8 +31,10 @@
         <dd>{{ obj.id }}</dd>
         <dt>Size:</dt>
         <dd>{{ obj.size }} bytes</dd>
+        {% if obj.subtree_size is not none %}
         <dt>Subtree Size:</dt>
         <dd>{{ obj.subtree_size }} bytes</dd>
+        {% endif %}
         {% if obj.value is not none %}
         <dt>Value:</dt>
         <dd>{{ obj.value }}</dd>

@@ -28,7 +28,7 @@
             <td><a href="{{ url_for('explore_object', dump_name=dump_name, obj_id=obj.id) }}">{{ obj.id }}</a></td>
             <td>{{ obj.type }}</td>
             <td>{{ obj.size }} bytes</td>
-            <td>{{ obj.subtree_size }} bytes</td>
+            <td>{% if obj.subtree_size is not none %}{{ obj.subtree_size }} bytes{% else %}Unknown{% endif %}</td>
             <td>{% if obj.value is not none %}{{ obj.value }}{% endif %}</td></tr>
     {% endfor %}
 </table>

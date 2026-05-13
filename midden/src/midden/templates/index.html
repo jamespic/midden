@@ -7,7 +7,7 @@
 <body>
     <h1>Heap Dump Explorer</h1>
 
-    <h2>Existing Dumps</h2>
+    <h2>Existing Heap Dumps</h2>
     {% if dump_names %}
         <ul>
         {% for name in dump_names %}
@@ -17,12 +17,12 @@
         {% endfor %}
         </ul>
     {% else %}
-        <p>No dumps loaded yet.</p>
+        <p>No heap dumps loaded yet.</p>
     {% endif %}
 
     <h2>Upload New Heap Dump</h2>
     <form action="{{ url_for('upload_dump') }}" method="post" enctype="multipart/form-data" class="upload-form">
-        <label for="dump_name">Dump Name:</label>
+        <label for="dump_name">Heap Dump Name:</label>
         <input type="text" id="dump_name" name="dump_name">
         <label for="estimator_precision">Subtree Size Estimate Precision</label>
         <select id="estimator_precision" name="estimator_precision" required>
