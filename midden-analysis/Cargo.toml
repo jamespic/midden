@@ -2,6 +2,7 @@
 name = "midden-analysis"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.96"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -11,6 +12,7 @@ crate-type = ["cdylib"]
 [profile.release]
 frame-pointers = "force-on" # Everyone deserves frame pointers
 debug = "line-tables-only"
+lto = "thin"
 strip = false
 
 [dependencies]

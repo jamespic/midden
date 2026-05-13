@@ -345,8 +345,7 @@ impl HeapDumpExplorer {
                 let item = item?;
                 let line_result: PyResult<_> = item.extract::<&[u8]>().map_err(|e| e.into());
                 let line = line_result?;
-                let record: RawObjectRecord =
-                    serde_json::from_slice(line).inspect_err(|e| println!("Here!"))?;
+                let record: RawObjectRecord = serde_json::from_slice(line)?;
                 self.primary_db.put(&mut tx, &record.id, &record)?;
 
                 for reference in &record.references {

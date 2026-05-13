@@ -22,6 +22,8 @@ pub struct SizeSketch<const N: usize> {
     values: [Bf16; N],
 }
 
+const LOG_ONE_MINUS_P: f64 = -1.3862943611198906; // Precompute log(0.25) to avoid computing it every time.
+
 impl<const N: usize> SizeSketch<N> {
     pub fn new() -> Self {
         Self {
@@ -30,7 +32,6 @@ impl<const N: usize> SizeSketch<N> {
     }
 
     pub fn add<I: Hash>(&mut self, id: I, value: f64) {
-        let log_one_minus_p = (0.25f64).ln();
         for i in 0..N {
             let mut hasher = DefaultHasher::new();
             hasher.write_usize(i);
@@ -40,7 +41,7 @@ impl<const N: usize> SizeSketch<N> {
             // # Code commented out deliberately, to show derivation of estimator more clearly.
             // let exp_variate = -(u).ln() / value;
             // let estimator = -log_one_minus_p / exp_variate;
-            let estimator = value * log_one_minus_p / u.ln();
+            let estimator = value * LOG_ONE_MINUS_P / u.ln();
             let estimator: Bf16 = Bf16::from_f64(estimator);
             if estimator > self.values[i] {
                 self.values[i] = estimator;
