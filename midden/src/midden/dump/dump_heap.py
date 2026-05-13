@@ -36,7 +36,9 @@ def _dump_heap():
     exclude_ids = set(
         [id(all_objects), id(extra_objects), id(object_ids_tracked), id(_dump_heap)]
     )
-    exclude_ids.add(id(exclude_ids))  # Don't forget to exclude the set of excluded ids itself!
+    exclude_ids.add(
+        id(exclude_ids)
+    )  # Don't forget to exclude the set of excluded ids itself!
 
     def _maybe_add_ref(ref_obj, refs):
         ref_id = id(ref_obj)
@@ -45,6 +47,7 @@ def _dump_heap():
             if ref_id not in object_ids_tracked:
                 extra_objects.append(ref_obj)
                 object_ids_tracked.add(ref_id)
+
     exclude_ids.add(id(_maybe_add_ref))
 
     def _get_all_references(obj):
@@ -69,6 +72,7 @@ def _dump_heap():
                 _maybe_add_ref(r, refs)
 
         return refs
+
     exclude_ids.add(id(_get_all_references))
 
     try:
@@ -111,6 +115,7 @@ def _dump_heap():
                 exclude_ids.add(id(line))
                 f.write(line)
                 f.write("\n")
+
             exclude_ids.add(id(dump_object))
 
             for obj in all_objects:
@@ -123,6 +128,7 @@ def _dump_heap():
     except Exception as e:
         sys.stderr.write(f"dump_heap error: {e}\n")
 
+
 def _get_qualname(obj):
     """Get a qualified name for an object, if possible."""
     if qualname := getattr(obj, "__qualname__", None):
@@ -131,6 +137,7 @@ def _get_qualname(obj):
         return name
     else:
         return repr(obj)
+
 
 def _get_prefix(obj):
     """Get the module name or class name for an object, if possible."""
@@ -141,35 +148,41 @@ def _get_prefix(obj):
     else:
         return ""
 
+
 def _name_extractor(obj):
     return _get_prefix(obj) + _get_qualname(obj)
+
 
 def _get_type_name(obj):
     """Get a friendly type name for an object."""
     t = type(obj)
     return _name_extractor(t)
 
+
 def _string_extractor(obj):
     if len(obj) > _max_value_len:
         return obj[:_max_value_len] + "...<truncated>"
     return obj
+
 
 def _bytes_extractor(obj):
     if len(obj) > _max_value_len:
         return repr(obj[:_max_value_len]) + "...<truncated>"
     return repr(obj)
 
+
 def _module_extractor(obj):
     return f"module {obj.__name__}"
+
 
 _value_extractors = {
     str: _string_extractor,
     bytes: _bytes_extractor,
-    int: lambda x: x,
-    float: lambda x: x,
+    int: str,
+    float: str,
     complex: str,
-    bool: lambda x: x,
-    type(None): lambda x: None,
+    bool: str,
+    type(None): lambda x: "None",
     ModuleType: _module_extractor,
     FunctionType: _name_extractor,
     BuiltinFunctionType: _name_extractor,

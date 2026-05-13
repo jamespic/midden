@@ -1,10 +1,10 @@
 use pyo3::prelude::*;
 
+mod heap_dump_explorer;
 mod set_membership_sketch;
 mod size_sketch;
 mod summed_radix_tree;
 mod tarjan;
-mod heap_dump_explorer;
 /// A Python module implemented in Rust.
 #[pymodule]
 mod midden_analysis {
@@ -23,6 +23,12 @@ mod midden_analysis {
         exceptions::PyStopIteration,
         prelude::*,
         types::{PyDict, PyTuple},
+    };
+
+    #[pymodule_export]
+    use crate::heap_dump_explorer::{
+        EstimatorPrecision, HeapDumpExplorer, ObjectRecord,
+        ObjectSummary, TypeSummary,
     };
 
     #[pyclass(frozen)]

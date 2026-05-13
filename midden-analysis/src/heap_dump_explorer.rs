@@ -1,5 +1,10 @@
 use std::{
-    borrow::Cow, convert::Infallible, error::Error, marker::PhantomData, str::FromStr, sync::Arc,
+    borrow::Cow,
+    collections::{HashMap, HashSet, VecDeque},
+    error::Error,
+    marker::PhantomData,
+    str::FromStr,
+    sync::Arc,
 };
 
 use heed::{
@@ -10,9 +15,8 @@ use heed::{
 };
 // """A class that allows exploring heap dumps exported by dump_heap.py.
 // It uses LMDB to store the data on disk and provides methods for querying objects, their types, and their relationships.
-use pyo3::{create_exception, prelude::*};
+use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
-// use serde_json::Value;
 
 use crate::{
     set_membership_sketch::{DefaultMembershipSketch, SetMembershipSketch},
@@ -22,39 +26,14 @@ use crate::{
     summed_radix_tree::{EMPTY, SummedRadixTree},
     tarjan::{self, GraphSCCVisitor},
 };
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-#[serde(untagged)]
-pub enum Value {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(String),
-    None,
-}
-
-impl<'py> IntoPyObject<'py> for Value {
-    type Target = PyAny;
-    type Output = Bound<'py, Self::Target>;
-    type Error = Infallible;
-
-    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        match self {
-            Value::Bool(b) => Ok(b.into_pyobject(py)?.as_any().clone()),
-            Value::Int(i) => Ok(i.into_pyobject(py)?.as_any().clone()),
-            Value::Float(f) => Ok(f.into_pyobject(py)?.as_any().clone()),
-            Value::Str(s) => Ok(s.into_pyobject(py)?.as_any().clone()),
-            Value::None => Ok(py.None().bind(py).clone()),
-        }
-    }
-}
+use anyhow;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[pyclass(frozen, skip_from_py_object, get_all)]
 pub struct ObjectSummary {
     pub id: Id,
-    pub type_name: String,
-    pub value: Option<Value>,
+    pub r#type: String,
+    pub value: Option<String>,
     pub size: u64,
     pub subtree_size: Option<u64>,
 }
@@ -62,9 +41,9 @@ pub struct ObjectSummary {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 struct RawObjectRecord {
     id: Id,
-    type_name: String,
+    r#type: String,
     references: Vec<Id>,
-    value: Option<Value>,
+    value: Option<String>,
     size: u64,
     subtree_size: Option<u64>,
 }
@@ -73,10 +52,10 @@ struct RawObjectRecord {
 #[pyclass(frozen, skip_from_py_object, get_all)]
 pub struct ObjectRecord {
     pub id: Id,
-    pub type_name: String,
+    pub r#type: String,
     pub references: Vec<ObjectSummary>,
     pub referrers: Vec<ObjectSummary>,
-    pub value: Option<Value>,
+    pub value: Option<String>,
     pub size: u64,
     pub subtree_size: Option<u64>,
 }
@@ -84,7 +63,7 @@ pub struct ObjectRecord {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 struct ObjectRecordNoValue {
     id: Id,
-    type_name: String,
+    r#type: String,
     references: Vec<Id>,
     size: u64,
 }
@@ -262,6 +241,7 @@ impl<const N: usize> BytesDecode<'_> for SetMembershipSketch<N> {
 #[pyclass(frozen, from_py_object)]
 #[derive(Debug, Clone)]
 pub enum EstimatorPrecision {
+    NoEstimates,
     Low,
     Medium,
     High,
@@ -302,7 +282,7 @@ impl Type {
     }
 }
 
-const ALL_TYPES_KEY: &[u8] = b"";
+const ALL_TYPES_KEY: &[u8] = b"All Types";
 
 impl<'a> BytesEncode<'a> for Type {
     type EItem = Self;
@@ -339,42 +319,6 @@ pub struct HeapDumpExplorer {
     sccs_sketch_db: Database<IdDbType, DefaultMembershipSketch, IntegerComparator>,
 }
 
-create_exception!(midden_analysis, MdbError, pyo3::exceptions::PyException);
-create_exception!(
-    midden_analysis,
-    EncodingError,
-    pyo3::exceptions::PyException
-);
-create_exception!(
-    midden_analysis,
-    DecodingError,
-    pyo3::exceptions::PyException
-);
-
-trait ToPyResult<T> {
-    fn to_py_res(self) -> PyResult<T>;
-}
-
-impl<T> ToPyResult<T> for heed::Result<T> {
-    fn to_py_res(self) -> PyResult<T> {
-        self.map_err(|e| match e {
-            HeedError::Io(e) => {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("IO Error: {}", e))
-            }
-            HeedError::Mdb(e) => PyErr::new::<MdbError, _>(format!("MDB Error: {}", e)),
-            HeedError::EnvAlreadyOpened => {
-                PyErr::new::<MdbError, _>("MDB Error: LMDB environment is already opened")
-            }
-            HeedError::Decoding(e) => {
-                PyErr::new::<DecodingError, _>(format!("Decoding error: {}", e))
-            }
-            HeedError::Encoding(e) => {
-                PyErr::new::<EncodingError, _>(format!("Encoding error: {}", e))
-            }
-        })
-    }
-}
-
 trait RollbackOnErr {
     fn rollback_on_err<T, E>(self, f: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E>;
 }
@@ -382,7 +326,10 @@ trait RollbackOnErr {
 impl<'a> RollbackOnErr for heed::RwTxn<'a> {
     fn rollback_on_err<T, E>(mut self, f: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
         match f(&mut self) {
-            Ok(result) => Ok(result),
+            Ok(result) => {
+                self.commit().unwrap(); // FIXME: I'll swing back and fix this when I switch this all over to use anyhow
+                Ok(result)
+            }
             Err(e) => {
                 self.abort();
                 Err(e)
@@ -392,34 +339,23 @@ impl<'a> RollbackOnErr for heed::RwTxn<'a> {
 }
 
 impl HeapDumpExplorer {
-    fn just_import_lines<'a>(&self, lines: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.env.write_txn().to_py_res()?.rollback_on_err(|mut tx| {
+    fn just_import_lines<'a>(&self, lines: &Bound<'_, PyAny>) -> anyhow::Result<()> {
+        self.env.write_txn()?.rollback_on_err(|mut tx| {
             for item in lines.try_iter()? {
                 let item = item?;
-                let line = item.extract::<&[u8]>()?;
-                let record: RawObjectRecord = serde_json::from_slice(line).map_err(|e| {
-                    PyErr::new::<DecodingError, _>(format!(
-                        "Decoding Error: Failed to decode JSON line: {}",
-                        e
-                    ))
-                })?;
-                self.primary_db
-                    .put(&mut tx, &record.id, &record)
-                    .to_py_res()?;
+                let line_result: PyResult<_> = item.extract::<&[u8]>().map_err(|e| e.into());
+                let line = line_result?;
+                let record: RawObjectRecord =
+                    serde_json::from_slice(line).inspect_err(|e| println!("Here!"))?;
+                self.primary_db.put(&mut tx, &record.id, &record)?;
 
                 for reference in &record.references {
-                    self.referrers_db
-                        .put(&mut tx, reference, &record.id)
-                        .to_py_res()?;
+                    self.referrers_db.put(&mut tx, reference, &record.id)?;
                 }
 
-                let type_key = Type::TypeName(record.type_name.clone());
-                self.types_db
-                    .put(&mut tx, &type_key, &record.id)
-                    .to_py_res()?;
-                self.types_db
-                    .put(&mut tx, &Type::AllTypes(), &record.id)
-                    .to_py_res()?;
+                let type_key = Type::TypeName(record.r#type.clone());
+                self.types_db.put(&mut tx, &type_key, &record.id)?;
+                self.types_db.put(&mut tx, &Type::AllTypes(), &record.id)?;
                 self.put_size_index_entry(
                     tx,
                     &type_key,
@@ -428,8 +364,7 @@ impl HeapDumpExplorer {
                         obj_id: record.id,
                     },
                     self.types_size_index_db,
-                )
-                .to_py_res()?;
+                )?;
             }
             Ok(())
         })
@@ -447,10 +382,14 @@ impl HeapDumpExplorer {
         Ok(())
     }
 
-    fn run_post_import_processing(&self, estimator_precision: EstimatorPrecision) -> PyResult<()> {
-        self.env.write_txn().to_py_res()?.rollback_on_err(|mut tx| {
-            self.build_type_summaries(&mut tx).to_py_res()?;
+    fn run_post_import_processing(
+        &self,
+        estimator_precision: EstimatorPrecision,
+    ) -> anyhow::Result<()> {
+        self.env.write_txn()?.rollback_on_err(|mut tx| {
+            self.build_type_summaries(&mut tx)?;
             match estimator_precision {
+                EstimatorPrecision::NoEstimates => Ok(()), // Don't build any sketches, so we can save time and space if the user doesn't care about estimates.
                 EstimatorPrecision::Low => self
                     .explore_strongly_connected_components::<'_, '_, LowPrecisionSizeSketch>(
                         &mut tx,
@@ -465,8 +404,7 @@ impl HeapDumpExplorer {
                     ),
                 EstimatorPrecision::Exact => self
                     .explore_strongly_connected_components::<'_, '_, Arc<SummedRadixTree>>(&mut tx),
-            }
-            .to_py_res()?;
+            }?;
             Ok(())
         })
     }
@@ -537,7 +475,7 @@ impl HeapDumpExplorer {
         tx: &heed::RoTxn,
         iter: impl Iterator<Item = heed::Result<(T, Id)>>,
         page: Option<usize>,
-    ) -> PyResult<Vec<ObjectSummary>> {
+    ) -> anyhow::Result<Vec<ObjectSummary>> {
         let ids: Vec<heed::Result<(T, Id)>> = if let Some(page) = page {
             iter.skip(page * PAGE_SIZE).take(PAGE_SIZE).collect()
         } else {
@@ -545,8 +483,8 @@ impl HeapDumpExplorer {
         };
         let mut result = Vec::with_capacity(ids.len());
         for id_res in ids {
-            let (_, id) = id_res.to_py_res()?;
-            let summary = self.get_summary(tx, id).to_py_res()?;
+            let (_, id) = id_res?;
+            let summary = self.get_summary(tx, id)?;
             result.push(summary);
         }
         Ok(result)
@@ -562,70 +500,70 @@ impl HeapDumpExplorer {
             })
         })
     }
+
+    fn _get_scc_sketch(
+        &self,
+        tx: &heed::RoTxn,
+        id: Id,
+    ) -> anyhow::Result<Option<DefaultMembershipSketch>> {
+        Ok(self.sccs_sketch_db.get(tx, &id)?)
+    }
 }
 
 #[pymethods]
 impl HeapDumpExplorer {
     #[new]
-    fn new(db_path: String) -> PyResult<Self> {
+    fn new(db_path: String) -> anyhow::Result<Self> {
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(10 * 1024 * 1024 * 1024)
                 .max_dbs(7)
                 .open(db_path)
-        }
-        .to_py_res()?;
-        let mut wtxn = env.write_txn().to_py_res()?;
+        }?;
+        let mut wtxn = env.write_txn()?;
         let primary_db = env
             .database_options()
             .name(PRIMARY_DB)
             .types()
             .key_comparator()
-            .create(&mut wtxn)
-            .to_py_res()?;
+            .create(&mut wtxn)?;
         let referrers_db = env
             .database_options()
             .name(REFERRERS_DB)
             .flags(DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED)
             .types()
             .key_comparator()
-            .create(&mut wtxn)
-            .to_py_res()?;
+            .create(&mut wtxn)?;
         let types_db = env
             .database_options()
             .name(TYPES_DB)
             .flags(DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED)
             .types()
-            .create(&mut wtxn)
-            .to_py_res()?;
+            .create(&mut wtxn)?;
         let types_size_index_db = env
             .database_options()
             .name(TYPES_SIZE_INDEX_DB)
             .flags(DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED)
             .types()
-            .create(&mut wtxn)
-            .to_py_res()?;
+            .create(&mut wtxn)?;
         let types_subtree_size_index_db = env
             .database_options()
             .name(TYPES_SUBTREE_SIZE_INDEX_DB)
             .flags(DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED)
             .types()
-            .create(&mut wtxn)
-            .to_py_res()?;
+            .create(&mut wtxn)?;
         let type_summaries_db = env
             .database_options()
             .name(TYPE_SUMMARIES_DB)
             .types()
-            .create(&mut wtxn)
-            .to_py_res()?;
+            .create(&mut wtxn)?;
         let sccs_sketch_db = env
             .database_options()
             .name(SCCS_SKETCH_DB)
             .types()
             .key_comparator()
-            .create(&mut wtxn)
-            .to_py_res()?;
-        drop(wtxn);
+            .create(&mut wtxn)?;
+        wtxn.commit()?;
 
         return Ok(Self {
             env,
@@ -643,7 +581,7 @@ impl HeapDumpExplorer {
         &self,
         lines: &Bound<'_, PyAny>,
         estimator_precision: EstimatorPrecision,
-    ) -> PyResult<()> {
+    ) -> anyhow::Result<()> {
         self.just_import_lines(lines)?;
         lines
             .py()
@@ -651,13 +589,10 @@ impl HeapDumpExplorer {
         Ok(())
     }
 
-    fn get_object(&self, obj_id: Id) -> PyResult<Option<ObjectRecord>> {
-        let rtxn = self.env.read_txn().to_py_res()?;
-        if let Some(record) = self.primary_db.get(&rtxn, &obj_id).to_py_res()? {
-            let referrers_iter_opt = self
-                .referrers_db
-                .get_duplicates(&rtxn, &obj_id)
-                .to_py_res()?;
+    fn get_object(&self, obj_id: Id) -> anyhow::Result<Option<ObjectRecord>> {
+        let rtxn = self.env.read_txn()?;
+        if let Some(record) = self.primary_db.get(&rtxn, &obj_id)? {
+            let referrers_iter_opt = self.referrers_db.get_duplicates(&rtxn, &obj_id)?;
 
             let referrers = match referrers_iter_opt {
                 Some(iter) => self.retrieve_page_of_object_summaries(&rtxn, iter, None)?,
@@ -666,13 +601,11 @@ impl HeapDumpExplorer {
 
             Ok(Some(ObjectRecord {
                 id: record.id,
-                type_name: record.type_name,
+                r#type: record.r#type,
                 value: record.value,
                 size: record.size,
                 subtree_size: record.subtree_size,
-                references: self
-                    .get_summaries_for_ids(&rtxn, &record.references)
-                    .to_py_res()?,
+                references: self.get_summaries_for_ids(&rtxn, &record.references)?,
                 referrers,
             }))
         } else {
@@ -680,24 +613,22 @@ impl HeapDumpExplorer {
         }
     }
 
-    fn get_type_summaries(&self) -> PyResult<Vec<(Type, TypeSummary)>> {
-        let rtxn = self.env.read_txn().to_py_res()?;
-        let summaries =
-            collect_results(self.type_summaries_db.iter(&rtxn).to_py_res()?).to_py_res()?;
+    fn get_type_summaries(&self) -> anyhow::Result<Vec<(Type, TypeSummary)>> {
+        let rtxn = self.env.read_txn()?;
+        let summaries = collect_results(self.type_summaries_db.iter(&rtxn)?)?;
         Ok(summaries)
     }
 
-    fn get_count_for_type(&self, typename: Type) -> PyResult<usize> {
-        let rtxn = self.env.read_txn().to_py_res()?;
+    fn get_count_for_type(&self, typename: Type) -> anyhow::Result<usize> {
+        let rtxn = self.env.read_txn()?;
         Ok(self
             .type_summaries_db
-            .get(&rtxn, &typename)
-            .to_py_res()?
+            .get(&rtxn, &typename)?
             .map(|summary| summary.count)
             .unwrap_or(0) as usize)
     }
 
-    fn get_page_count_for_type(&self, typename: Type) -> PyResult<usize> {
+    fn get_page_count_for_type(&self, typename: Type) -> anyhow::Result<usize> {
         let count = self.get_count_for_type(typename)?;
         Ok((count + PAGE_SIZE - 1) / PAGE_SIZE)
     }
@@ -706,9 +637,9 @@ impl HeapDumpExplorer {
         &self,
         typename: Type,
         page: Option<usize>,
-    ) -> PyResult<Vec<ObjectSummary>> {
-        let rtxn = self.env.read_txn().to_py_res()?;
-        if let Some(iter) = self.types_db.get_duplicates(&rtxn, &typename).to_py_res()? {
+    ) -> anyhow::Result<Vec<ObjectSummary>> {
+        let rtxn = self.env.read_txn()?;
+        if let Some(iter) = self.types_db.get_duplicates(&rtxn, &typename)? {
             self.retrieve_page_of_object_summaries(&rtxn, iter, page)
         } else {
             Ok(vec![])
@@ -717,17 +648,17 @@ impl HeapDumpExplorer {
 
     fn get_objects_by_type_ordered_by_size(
         &self,
-        type_name: Type,
+        r#type: Type,
         subtree_size: bool,
         page: Option<usize>,
-    ) -> PyResult<Vec<ObjectSummary>> {
-        let rtxn = self.env.read_txn().to_py_res()?;
+    ) -> anyhow::Result<Vec<ObjectSummary>> {
+        let rtxn = self.env.read_txn()?;
         let index_db = if subtree_size {
             &self.types_subtree_size_index_db
         } else {
             &self.types_size_index_db
         };
-        if let Some(iter) = index_db.get_duplicates(&rtxn, &type_name).to_py_res()? {
+        if let Some(iter) = index_db.get_duplicates(&rtxn, &r#type)? {
             self.retrieve_page_of_object_summaries(
                 &rtxn,
                 iter.map(|res| res.map(|(_, index_entry)| (index_entry.size, index_entry.obj_id))),
@@ -738,52 +669,74 @@ impl HeapDumpExplorer {
         }
     }
 
-    //     @tx
-    //     def find_path_between_objects(
-    //         self, start_id: int, end_id: int, avoid_ids: set[int] | None = None
-    //     ) -> list[ObjectSummary] | None:
-    //         """Find a path of references from start_id to end_id, optionally avoiding certain IDs.
+    fn find_path_between_objects(
+        &self,
+        start_id: Id,
+        end_id: Id,
+        avoiding_ids: HashSet<Id>,
+    ) -> anyhow::Result<Option<Vec<ObjectSummary>>> {
+        let rtxn = self.env.read_txn()?;
+        let remapped_db = self
+            .primary_db
+            .remap_data_type::<SerdeJson<ObjectRecordNoValue>>();
+        let mut queue = VecDeque::new();
+        queue.push_back(start_id);
+        let mut predecessors = HashMap::new();
+        predecessors.insert(start_id, None); // Doubles as a visited set
+        let mut dead_ends = HashSet::new();
+        let start_sketch = self._get_scc_sketch(&rtxn, start_id)?;
+        let end_sketch = self._get_scc_sketch(&rtxn, end_id)?;
+        if let (Some(end_sketch), Some(start_sketch)) = (&end_sketch, &start_sketch) {
+            if !end_sketch.is_subset_of(&start_sketch) {
+                return Ok(None); // No path can exist if end's reachable SCCs aren't a subset of start's reachable SCCs
+            }
+        };
+        while let Some(current_id) = queue.pop_front() {
+            if current_id == end_id {
+                // Reconstruct path
+                let mut path = Vec::new();
+                let mut current_opt = Some(current_id);
+                while let Some(current_id) = current_opt {
+                    let summary = self.get_summary(&rtxn, current_id)?;
+                    path.push(summary);
+                    current_opt = predecessors[&current_id];
+                }
+                return Ok(Some(path.into_iter().rev().collect()));
+            }
+            if dead_ends.contains(&current_id) {
+                continue; // Skip known dead ends
+            }
+            if let Some(current_sketch) = self._get_scc_sketch(&rtxn, current_id)? {
+                if let Some(end_sketch) = &end_sketch {
+                    if !end_sketch.is_subset_of(&current_sketch) {
+                        dead_ends.insert(current_id);
+                        continue; // No path can exist from current to end, so skip it
+                    }
+                }
+            }
 
-    //         Uses SCC sketches to quickly rule out impossible paths.
-    //         Returns a list of ObjectSummary representing the path, or None if no path exists.
-    //         """
-    //         queue = deque([start_id])
-    //         predecessors = {start_id: None}  # Doubles as a visited set
-    //         dead_ends = set()
-    //         start_sketch = self._get_scc_sketch(start_id)
-    //         end_sketch = self._get_scc_sketch(end_id)
-    //         if not end_sketch.is_subset_of(start_sketch):
-    //             return None  # No path can exist if end's reachable SCCs aren't a subset of start's reachable SCCs
-    //         while queue:
-    //             current_id = queue.popleft()
-    //             if current_id == end_id:
-    //                 # Reconstruct path
-    //                 path = []
-    //                 while current_id is not None:
-    //                     summary = self._load_and_validate(current_id, ObjectSummary)
-    //                     assert summary is not None
-    //                     path.append(summary)
-    //                     current_id = predecessors[current_id]
-    //                 return list(reversed(path))
-
-    //             if current_id in dead_ends:
-    //                 continue  # Skip known dead ends
-    //             current_sketch = self._get_scc_sketch(current_id)
-    //             if not end_sketch.is_subset_of(current_sketch):
-    //                 dead_ends.add(current_id)
-    //                 continue  # No path can exist from current to end, so skip it
-
-    //             object_record = self._load_and_validate(current_id, _ObjectRecordNoValue)
-    //             if self._should_skip_link_in_subtree_exploration(object_record):
-    //                 dead_ends.add(current_id)
-    //                 continue
-    //             assert object_record is not None
-    //             for ref_id in object_record.references:
-    //                 if avoid_ids is not None and ref_id in avoid_ids:
-    //                     continue
-    //                 if ref_id not in predecessors:
-    //                     predecessors[ref_id] = current_id
-    //                     queue.append(ref_id)
+            let object_record = remapped_db.get(&rtxn, &current_id)?.ok_or_else(|| {
+                anyhow::anyhow!(format!(
+                    "Decoding error: Missing record for ID {}",
+                    current_id
+                ))
+            })?;
+            if should_skip_link_in_subtree_exploration(&object_record) {
+                dead_ends.insert(current_id);
+                continue;
+            }
+            for ref_id in object_record.references {
+                if avoiding_ids.contains(&ref_id) {
+                    continue;
+                }
+                if !predecessors.contains_key(&ref_id) {
+                    predecessors.insert(ref_id, Some(current_id));
+                    queue.push_back(ref_id);
+                }
+            }
+        }
+        Ok(None)
+    }
 }
 
 struct StronglyConnectedComponentsVisitor<'vis, 'env, SizeEstimatorT: SizeEstimator>
@@ -798,12 +751,10 @@ where
     _estimator: PhantomData<SizeEstimatorT>,
 }
 
-impl<T: SizeEstimator> StronglyConnectedComponentsVisitor<'_, '_, T> {
-    fn should_skip_link_in_subtree_exploration(&self, record: &ObjectRecordNoValue) -> bool {
-        /* Heuristic: skip links to modules, since they often create large SCCs that
-        aren't interesting. */
-        record.type_name == "builtins.module"
-    }
+fn should_skip_link_in_subtree_exploration(record: &ObjectRecordNoValue) -> bool {
+    /* Heuristic: skip links to modules, since they often create large SCCs that
+    aren't interesting. */
+    record.r#type == "builtins.module"
 }
 
 #[derive(Debug, Clone)]
@@ -832,7 +783,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
             }
             if !already_visited(&node_id) {
                 let record = record.decode().map_err(|e| HeedError::Decoding(e))?;
-                if self.should_skip_link_in_subtree_exploration(&record) {
+                if should_skip_link_in_subtree_exploration(&record) {
                     self.known_skips.insert(node_id);
                     continue;
                 }
@@ -916,7 +867,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
             .put(&mut self.rw_txn, &node_id, &record)?;
         self.explorer.put_size_index_entry(
             &mut self.rw_txn,
-            &Type::TypeName(record.type_name),
+            &Type::TypeName(record.r#type),
             &SizeIndexEntry {
                 size: subtree_size,
                 obj_id: node_id,
@@ -959,13 +910,13 @@ mod tests {
 
     #[test]
     fn test_object_summary_deserialization() {
-        let json = r#"{"id": 1, "type_name": "int", "value": 42, "size": 28, "subtree_size": 100, "references": []}"#;
+        let json = r#"{"id": 1, "type": "int", "value": 42, "size": 28, "subtree_size": 100, "references": []}"#;
         let summary: ObjectSummary = serde_json::from_str(json).unwrap();
         assert_eq!(
             summary,
             ObjectSummary {
                 id: 1,
-                type_name: "int".to_string(),
+                r#type: "int".to_string(),
                 value: Some(Value::Int(42)),
                 size: 28,
                 subtree_size: Some(100),
@@ -975,13 +926,13 @@ mod tests {
 
     #[test]
     fn test_object_summary_deserialization_opt_fields_empty() {
-        let json = r#"{"id": 1, "type_name": "int", "size": 28}"#;
+        let json = r#"{"id": 1, "type": "int", "size": 28}"#;
         let summary: ObjectSummary = serde_json::from_str(json).unwrap();
         assert_eq!(
             summary,
             ObjectSummary {
                 id: 1,
-                type_name: "int".to_string(),
+                r#type: "int".to_string(),
                 value: None,
                 size: 28,
                 subtree_size: None,

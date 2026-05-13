@@ -1,13 +1,24 @@
 """A simple Flask GUI, with templated HTML with very basic styling, that lets the user explore a heap dump created by dump_heap.py."""
 
+import shutil
+
 from werkzeug.exceptions import NotFound
 from ntpath import basename
 import os
+import pathlib
 
 from flask import Flask, request, redirect, url_for, render_template, session
-from .heap_dump_explorer import HeapDumpExplorer, TypeSummary
+from midden_analysis import HeapDumpExplorer, TypeSummary, EstimatorPrecision
 
 DUMPS_DIR = os.getenv("DUMPS_DIR", "/tmp/dumps")
+
+PRECISION_MAP = {
+    "no_estimates": EstimatorPrecision.NoEstimates,
+    "low": EstimatorPrecision.Low,
+    "medium": EstimatorPrecision.Medium,
+    "high": EstimatorPrecision.High,
+    "exact": EstimatorPrecision.Exact,
+}
 
 
 def create_app():
@@ -33,14 +44,27 @@ def create_app():
 
     @app.route("/upload_dump", methods=["POST"])
     def upload_dump():
-        dump_name = request.form["dump_name"]
+        dump_name = request.form.get("dump_name")
         dump_file = request.files["dump_file"]
+        if not dump_name:
+            if upload_filename := dump_file.filename:
+                dump_name = pathlib.Path(upload_filename).stem
+            else:
+                dump_name = f"heap_dump_{len(loaded_dumps) + 1}"
         if dump_name in loaded_dumps:
-            return f"Dump with name '{dump_name}' already exists", 409
-        if "/" in dump_name or "\\" in dump_name:
-            return "Invalid dump name", 400
-        explorer = HeapDumpExplorer(f"{DUMPS_DIR}/{dump_name}.lmdb")
-        explorer.import_lines(dump_file)
+            return f"Heap dump with name '{dump_name}' already exists", 409
+        if "/" in dump_name or "\\" in dump_name or dump_name.startswith("."):
+            return "Invalid heap dump name", 400
+        dump_dir = f"{DUMPS_DIR}/{dump_name}.lmdb"
+        precision = request.form.get("estimator_precision", "medium")
+        estimator_precision = PRECISION_MAP.get(precision, EstimatorPrecision.Medium)
+        os.mkdir(dump_dir)
+        try:
+            explorer = HeapDumpExplorer(f"{DUMPS_DIR}/{dump_name}.lmdb")
+            explorer.import_lines(dump_file, estimator_precision)
+        except Exception:
+            shutil.rmtree(dump_dir)
+            raise
         loaded_dumps[dump_name] = explorer
         return redirect(url_for("explore_dump", dump_name=dump_name))
 
@@ -137,7 +161,9 @@ def create_app():
         avoid_ids = set(request.args.getlist("avoid_id", type=int))
         if from_id is None or to_id is None:
             return "Missing from_id or to_id query parameters", 400
-        path = explorer.find_path_between_objects(from_id, to_id, avoid_ids=avoid_ids)
+        path = explorer.find_path_between_objects(
+            from_id, to_id, avoiding_ids=avoid_ids
+        )
         return render_template(
             "path.html",
             dump_name=dump_name,
