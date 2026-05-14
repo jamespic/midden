@@ -4,6 +4,7 @@ use xxhash_rust::xxh3::Xxh3Default;
 
 const FANOUT: usize = 8;
 
+/// Persistent radix tree used for exact subtree-size unions.
 #[derive(Debug)]
 pub enum SummedRadixTree {
     Empty,
@@ -25,9 +26,12 @@ thread_local! {
 }
 
 impl SummedRadixTree {
+    /// Return the shared empty tree.
     pub fn new() -> Rc<Self> {
         EMPTY.with(|empty| empty.clone())
     }
+
+    /// Read the value stored at one position.
     pub fn get_value(&self, position: usize) -> u64 {
         match self {
             Self::Empty => 0,
@@ -54,10 +58,12 @@ impl SummedRadixTree {
     }
 
     #[allow(unused)] // Used in test configurations, but not in production code, so allow it to be unused.
+    /// Return whether a position has a non-zero value.
     pub fn contains(&self, position: usize) -> bool {
         self.get_value(position) > 0
     }
 
+    /// Return a structural hash used for cheap equality checks during unions.
     pub fn unique_hash(&self) -> u128 {
         match self {
             Self::Empty => 0,
@@ -66,6 +72,7 @@ impl SummedRadixTree {
         }
     }
 
+    /// Return the sum of all values stored in the tree.
     pub fn total(&self) -> u64 {
         match self {
             Self::Empty => 0,
@@ -74,6 +81,7 @@ impl SummedRadixTree {
         }
     }
 
+    /// Return a tree with one position updated to the maximum-seen value.
     pub fn add(self: &Rc<Self>, position: usize, value: u64) -> Rc<Self> {
         if self.get_value(position) == value {
             self.clone()
@@ -83,6 +91,7 @@ impl SummedRadixTree {
         }
     }
 
+    /// Union two trees by taking the elementwise maximum.
     pub fn union<'a>(self: &Rc<Self>, other: &Rc<Self>) -> Rc<Self> {
         match (self.as_ref(), other.as_ref()) {
             (Self::Empty, _) => other.clone(),

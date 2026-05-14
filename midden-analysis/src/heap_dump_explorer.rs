@@ -13,8 +13,6 @@ use heed::{
     byteorder::NativeEndian,
     types::{Lazy, LazyDecode, SerdeJson, U64},
 };
-// """A class that allows exploring heap dumps exported by dump_heap.py.
-// It uses LMDB to store the data on disk and provides methods for querying objects, their types, and their relationships.
 use pyo3::{prelude::*, types::PyString};
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +27,7 @@ use anyhow;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[pyclass(frozen, skip_from_py_object, get_all)]
+/// Lightweight object metadata used in lists and graph paths.
 pub struct ObjectSummary {
     pub id: Id,
     pub r#type: String,
@@ -49,6 +48,7 @@ struct RawObjectRecord {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[pyclass(frozen, skip_from_py_object, get_all)]
+/// Full object record including references and referrers.
 pub struct ObjectRecord {
     pub id: Id,
     pub r#type: String,
@@ -125,6 +125,7 @@ impl BytesDecode<'_> for SizeIndexEntry {
 }
 #[derive(Debug, PartialEq, Clone)]
 #[pyclass(frozen, skip_from_py_object, get_all)]
+/// Aggregate counts and sizes for one type.
 pub struct TypeSummary {
     pub count: u64,
     pub total_size: u64,
@@ -215,6 +216,7 @@ impl SizeEstimator for Rc<SummedRadixTree> {
 
 #[pyclass(frozen, from_py_object)]
 #[derive(Debug, Clone)]
+/// Controls the speed and accuracy of subtree-size estimation.
 pub enum EstimatorPrecision {
     NoEstimates,
     Low,
@@ -287,6 +289,7 @@ impl<'txn> BytesDecode<'txn> for Type {
 }
 
 #[pyclass]
+/// LMDB-backed explorer for heap dumps produced by the Python dumper.
 pub struct HeapDumpExplorer {
     env: Env<WithoutTls>,
     primary_db: Database<IdDbType, SerdeJson<RawObjectRecord>, IntegerComparator>,
@@ -460,6 +463,7 @@ impl HeapDumpExplorer {
 #[pymethods]
 impl HeapDumpExplorer {
     #[new]
+    /// Open or create the LMDB environment at `db_path`.
     fn new(db_path: String) -> anyhow::Result<Self> {
         let env = unsafe {
             EnvOpenOptions::new()
@@ -518,6 +522,7 @@ impl HeapDumpExplorer {
         });
     }
 
+    /// Import JSONL heap records and build the requested secondary indexes.
     fn import_lines(
         &self,
         lines: &Bound<'_, PyAny>,
@@ -530,6 +535,7 @@ impl HeapDumpExplorer {
         Ok(())
     }
 
+    /// Return one object with expanded references and referrers.
     fn get_object(&self, obj_id: Id) -> anyhow::Result<Option<ObjectRecord>> {
         let rtxn = self.env.read_txn()?;
         if let Some(record) = self.primary_db.get(&rtxn, &obj_id)? {
@@ -554,12 +560,14 @@ impl HeapDumpExplorer {
         }
     }
 
+    /// Return summary rows for every known type.
     fn get_type_summaries(&self) -> anyhow::Result<Vec<(Type, TypeSummary)>> {
         let rtxn = self.env.read_txn()?;
         let summaries = collect_results(self.type_summaries_db.iter(&rtxn)?)?;
         Ok(summaries)
     }
 
+    /// Return the number of objects recorded for one type.
     fn get_count_for_type(&self, typename: Type) -> anyhow::Result<usize> {
         let rtxn = self.env.read_txn()?;
         Ok(self
@@ -569,11 +577,13 @@ impl HeapDumpExplorer {
             .unwrap_or(0) as usize)
     }
 
+    /// Return the number of result pages for one type.
     fn get_page_count_for_type(&self, typename: Type) -> anyhow::Result<usize> {
         let count = self.get_count_for_type(typename)?;
         Ok((count + PAGE_SIZE - 1) / PAGE_SIZE)
     }
 
+    /// Return one page of objects for a type in id order.
     fn get_objects_by_type(
         &self,
         typename: Type,
@@ -587,6 +597,7 @@ impl HeapDumpExplorer {
         }
     }
 
+    /// Return one page of objects ordered by direct size or estimated subtree size.
     fn get_objects_by_type_ordered_by_size(
         &self,
         r#type: Type,
@@ -610,6 +621,7 @@ impl HeapDumpExplorer {
         }
     }
 
+    /// Find one reference path between two objects, optionally skipping specific IDs.
     fn find_path_between_objects(
         &self,
         start_id: Id,
@@ -632,20 +644,20 @@ impl HeapDumpExplorer {
         let endpoint_subtree_size = endpoint.subtree_size;
 
         let mut predecessors = HashMap::new();
-        predecessors.insert(start_id, None); // Doubles as a visited set
+        predecessors.insert(start_id, None); // Also acts as the visited set.
         let mut dead_ends = HashSet::new();
         while let Some(current_obj) = queue.pop_front() {
             if let (Some(current_subtree_size), Some(endpoint_subtree_size)) =
                 (current_obj.subtree_size, endpoint_subtree_size)
             {
-                // Heuristic: if the subtree size is smaller than the endpoint's subtree size, it can't possibly lead to the endpoint
+                // Smaller subtrees cannot contain the endpoint, so skip them early.
                 if current_subtree_size < endpoint_subtree_size {
                     dead_ends.insert(current_obj.id);
                     continue; 
                 }
             }
             if current_obj.id == end_id {
-                // Reconstruct path
+                // Walk the predecessor chain back to the start.
                 let mut path = Vec::new();
                 let mut current_opt = Some(current_obj.id);
                 while let Some(current_id) = current_opt {
@@ -657,7 +669,7 @@ impl HeapDumpExplorer {
             }
             for ref_id in current_obj.references {
                 if dead_ends.contains(&ref_id) {
-                    continue; // Skip known dead ends
+                    continue; // Skip branches we already proved cannot succeed.
                 }
                 if avoiding_ids.contains(&ref_id) {
                     continue;
@@ -693,8 +705,7 @@ where
 }
 
 fn should_skip_link_in_subtree_exploration(record: &ObjectRecordNoValue) -> bool {
-    /* Heuristic: skip links to modules, since they often create large SCCs that
-    aren't interesting. */
+    /* Skip module links: they tend to collapse unrelated objects into huge SCCs. */
     record.r#type == "builtins.module"
 }
 

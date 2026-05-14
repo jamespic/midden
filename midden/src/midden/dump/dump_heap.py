@@ -26,6 +26,7 @@ _max_value_len = 1000
 
 
 def _dump_heap():
+    """Write a JSONL heap snapshot for the current process to the fixed dump path."""
     # Get all objects tracked by gc
     all_objects = gc.get_objects()
     print(f"Found {len(all_objects)} objects from gc.get_objects()", file=sys.stderr)
@@ -80,6 +81,7 @@ def _dump_heap():
             exclude_ids.add(id(f))
 
             def dump_object(obj):
+                """Serialize one object unless it belongs to the dumper's bookkeeping."""
                 obj_id = id(obj)
 
                 # Skip our own bookkeeping objects
@@ -150,6 +152,7 @@ def _get_prefix(obj):
 
 
 def _name_extractor(obj):
+    """Return a readable name for callables, descriptors, and types."""
     return _get_prefix(obj) + _get_qualname(obj)
 
 
@@ -160,18 +163,21 @@ def _get_type_name(obj):
 
 
 def _string_extractor(obj):
+    """Keep long strings readable by truncating them in the dump."""
     if len(obj) > _max_value_len:
         return obj[:_max_value_len] + "...<truncated>"
     return obj
 
 
 def _bytes_extractor(obj):
+    """Render bytes as repr output, truncating long values."""
     if len(obj) > _max_value_len:
         return repr(obj[:_max_value_len]) + "...<truncated>"
     return repr(obj)
 
 
 def _module_extractor(obj):
+    """Render modules by name rather than by their default repr."""
     return f"module {obj.__name__}"
 
 
@@ -199,4 +205,4 @@ _value_extractors = {
 }
 
 
-# _dump_heap() # This line is meant to be replaced by the injector with a call to _dump_heap() after injecting the code into the target process.
+# _dump_heap()  # Replaced by the injector so the dump only runs inside the target process.

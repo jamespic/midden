@@ -26,6 +26,7 @@ PRECISION_MAP = {
 
 
 def create_app():
+    """Create the Flask app and preload any dumps already stored on disk."""
     os.makedirs(DUMPS_DIR, exist_ok=True)
     loaded_dumps: dict[str, HeapDumpExplorer] = {
         basename(path)[:-5]: HeapDumpExplorer(f"{DUMPS_DIR}/{path}")
@@ -34,6 +35,7 @@ def create_app():
     }
 
     def get_dump(dump_name) -> HeapDumpExplorer:
+        """Return a loaded dump or raise a 404 for unknown names."""
         explorer = loaded_dumps.get(dump_name)
         if not explorer:
             raise NotFound(f"Dump '{dump_name}' not found")
@@ -48,6 +50,7 @@ def create_app():
 
     @app.route("/upload_dump", methods=["POST"])
     def upload_dump():
+        """Import an uploaded JSONL heap dump into a new LMDB-backed explorer."""
         dump_name = request.form.get("dump_name")
         dump_file = request.files["dump_file"]
         if not dump_name:
@@ -75,7 +78,7 @@ def create_app():
     @app.route("/explore/<dump_name>")
     def explore_dump(dump_name):
         explorer = get_dump(dump_name)
-        # For simplicity, just show a count of objects by type
+        # The landing page for a dump is a type summary table.
         type_summaries: list[tuple[str, TypeSummary]] = explorer.get_type_summaries()
         sort_by = request.args.get("sort_by", "count")
         match sort_by:
@@ -91,6 +94,7 @@ def create_app():
 
     @app.route("/explore/<dump_name>/type/<type_name>")
     def explore_type(dump_name, type_name):
+        """Show one page of objects for a type, with optional size-based sorting."""
         page = request.args.get("page", 1, type=int)
         page_zero_indexed = max(page - 1, 0)
         explorer = get_dump(dump_name)
@@ -121,6 +125,7 @@ def create_app():
 
     @app.route("/explore/<dump_name>/object/<int:obj_id>")
     def explore_object(dump_name, obj_id):
+        """Show one object together with its references and referrers."""
         explorer = get_dump(dump_name)
         obj = explorer.get_object(obj_id)
         current_from_id = session.get(f"path_finding_from_id:{dump_name}")
@@ -137,6 +142,7 @@ def create_app():
 
     @app.route("/explore/<dump_name>/set_path_finding_endpoint", methods=["POST"])
     def set_path_finding_endpoint(dump_name):
+        """Store or complete the pair of object IDs used for path finding."""
         from_id = request.form.get(
             "from_id", session.get(f"path_finding_from_id:{dump_name}"), type=int
         )
@@ -159,6 +165,7 @@ def create_app():
 
     @app.route("/explore/<dump_name>/find_path")
     def find_path(dump_name):
+        """Find a reference path between two objects in the selected dump."""
         explorer = get_dump(dump_name)
         from_id = request.args.get("from_id", type=int)
         to_id = request.args.get("to_id", type=int)
@@ -179,11 +186,12 @@ def create_app():
 
     app.secret_key = os.urandom(
         16
-    )  # Uses embedded database, so sharing keys across instances is pointless
+    )  # This app keeps state in-process, so a per-process key is fine.
     return app
 
 
 def main():
+    """Run the local Midden web server."""
     arg_parser = argparse.ArgumentParser(description="Run the Midden web server")
     arg_parser.add_argument(
         "--host", default="127.0.0.1"

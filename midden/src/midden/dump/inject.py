@@ -29,6 +29,7 @@ _FILES_NEEDED_FOR_INJECTION = ["dump_heap.py", "inject.py"]
 
 
 def _build_tarball_of_dumping_code():
+    """Bundle the dump scripts so they can be copied into another namespace."""
     file_obj = io.BytesIO()
     with tarfile.open(fileobj=file_obj, mode="w:gz") as tar:
         for filename in _FILES_NEEDED_FOR_INJECTION:
@@ -60,6 +61,7 @@ _DUMP_SCRIPT = (pathlib.Path(__file__).parent / "dump_heap.py").read_text()
 
 
 def _build_dump_heap_code(output_file):
+    """Rewrite the injected script so it writes to the requested output path."""
     return _DUMP_SCRIPT.replace(DEFAULT_DUMP_FILE, output_file).replace(
         "# _dump_heap()", "_dump_heap()"
     )
@@ -70,6 +72,7 @@ def _dump_heap_from_pid_possibly_using_an_alternate_python_interpreter(
     output_file=DEFAULT_DUMP_FILE,
     can_use_alternate_python_interpreter=True,
 ):
+    """Pick a compatible Python interpreter before injecting, if needed."""
     if can_use_alternate_python_interpreter and (
         alternate_python := _should_use_alternate_python_interpreter(pid)
     ):
@@ -87,7 +90,8 @@ def _dump_heap_from_pid_possibly_using_an_alternate_python_interpreter(
 def _dump_heap_from_pid_using_alternate_python_interpreter(
     pid, alternate_python, output_file=DEFAULT_DUMP_FILE
 ):
-    # We untar the dumping code into a temporary directory, since we might be namespaces and not have access to our original filesystem
+    """Run the injector with a different Python executable inside a temp copy of the code."""
+    # The target mount namespace may not be able to see our original source tree.
     with tempfile.TemporaryDirectory() as tmpdir:
         tarball_file_obj = io.BytesIO(_TARBALL)
         with tarfile.open(fileobj=tarball_file_obj, mode="r:gz") as tar:
@@ -107,6 +111,7 @@ def _dump_heap_from_pid_using_alternate_python_interpreter(
 
 
 def _should_use_alternate_python_interpreter(pid) -> str | None:
+    """Return a better-matched Python executable for injection, if one is needed."""
     try:
         exe, maps = _get_exe_and_maps(pid)
     except Exception as e:
@@ -150,6 +155,7 @@ def _should_use_alternate_python_interpreter(pid) -> str | None:
 
 
 def _get_exe_and_maps(pid):
+    """Inspect the target process executable and mapped libraries."""
     if _psutil_available:
         psutil_process = psutil.Process(pid)
         exe = psutil_process.exe()
@@ -179,6 +185,7 @@ def _get_exe_and_maps(pid):
 
 
 def _can_this_python_inject(exe):
+    """Return whether the current interpreter likely matches the target runtime."""
     if exe == sys.executable:
         return True
     basename = os.path.basename(exe)
@@ -187,6 +194,7 @@ def _can_this_python_inject(exe):
 
 
 def _effective_executable_name():
+    """Return the versioned Python executable name for the current runtime."""
     return f"python{sys.version_info.major}.{sys.version_info.minor}"
 
 
@@ -196,6 +204,7 @@ def _dump_heap_from_pid_possibly_in_namespace(
     can_use_namespace_injection=True,
     can_use_alternate_python_interpreter=True,
 ):
+    """Decide whether the dump has to run from inside the target mount namespace."""
     if can_use_namespace_injection and _should_use_namespace(pid):
         print(
             "Target process is in a different mount namespace, using namespace injection method",
@@ -213,6 +222,7 @@ def _dump_heap_from_pid_possibly_in_namespace(
 def _dump_heap_from_pid_in_namespace(
     pid, output_file=DEFAULT_DUMP_FILE, can_use_alternate_python_interpreter=True
 ):
+    """Copy the dump file out of the target mount namespace after injection."""
     dump_loc_in_namespace = f"/tmp/dump_{pid}.jsonl"
     out = os.open(output_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
 
@@ -231,6 +241,7 @@ def _dump_heap_from_pid_in_namespace(
 
 @contextmanager
 def _in_namespace(pid):
+    """Fork into the target mount and PID namespaces for the duration of the block."""
     inner_pid = _identify_pid_within_namespace(pid)
     if (forked_pid := os.fork()) == 0:
         os.setns(os.pidfd_open(pid), os.CLONE_NEWNS | os.CLONE_NEWPID)
@@ -251,6 +262,7 @@ def _in_namespace(pid):
 
 
 def _identify_pid_within_namespace(pid):
+    """Translate a host PID into the PID seen inside the target namespace."""
     with open(f"/proc/{pid}/status") as f:
         for line in f:
             if line.startswith("NSpid:"):
@@ -258,11 +270,13 @@ def _identify_pid_within_namespace(pid):
 
 
 def _dump_heap_from_pid(pid, output_file=DEFAULT_DUMP_FILE):
+    """Build the payload script and inject it into the target process."""
     code = _build_dump_heap_code(output_file)
     _inject_into_process(pid, code)
 
 
 def _inject_into_process(pid, code):
+    """Inject Python code with remote_exec when available, else fall back to gdb."""
     script_file = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
     script_file.write(code)
     script_file.close()
@@ -295,6 +309,7 @@ def _inject_into_process(pid, code):
 
 
 def _should_use_namespace(pid):
+    """Return whether the target process lives in a different mount namespace."""
     try:
         import os
 
@@ -307,6 +322,7 @@ def _should_use_namespace(pid):
 
 
 def main():
+    """CLI entry point for dumping a live Python process by PID."""
     import argparse
 
     parser = argparse.ArgumentParser(

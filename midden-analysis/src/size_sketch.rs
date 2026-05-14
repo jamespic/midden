@@ -3,9 +3,9 @@ use std::hash::{Hash, Hasher};
 use float16::Bf16;
 use xxhash_rust::xxh3::Xxh3Default;
 
+/// A compact sum-distinct sketch used to estimate subtree sizes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SizeSketch<const N: usize> {
-    /** A sum-distinct sketch for estimating the size of a multiset */
     /* The key observation that powers this sketch is that if we have exponential random variables
      * with parameters lambda_1, lambda_2, ..., lambda_n, then the minimum of these random variables is an exponential
      * with parameter lambda_1 + lambda_2 + ... + lambda_n.
@@ -26,12 +26,14 @@ pub struct SizeSketch<const N: usize> {
 const LOG_ONE_MINUS_P: f64 = -1.3862943611198906; // Precompute log(0.25) to avoid computing it every time.
 
 impl<const N: usize> SizeSketch<N> {
+    /// Create an empty sketch.
     pub fn new() -> Self {
         Self {
             values: [Bf16::from_f64(0.0); N],
         }
     }
 
+    /// Add one weighted element to the sketch.
     pub fn add<I: Hash>(&mut self, id: I, value: f64) {
         for i in 0..N {
             let mut hasher = Xxh3Default::new();
@@ -51,6 +53,7 @@ impl<const N: usize> SizeSketch<N> {
     }
 
     #[allow(unused)] // Used in test configurations, but not in production code, so allow it to be unused.
+    /// Merge two sketches without mutating either input.
     pub fn union(&self, other: &Self) -> Self {
         let mut result = Self::new();
         for i in 0..N {
@@ -59,12 +62,14 @@ impl<const N: usize> SizeSketch<N> {
         result
     }
 
+    /// Merge another sketch into this one in place.
     pub fn update_in_place(&mut self, other: &Self) {
         for i in 0..N {
             self.values[i] = self.values[i].max(other.values[i]);
         }
     }
 
+    /// Return the current size estimate.
     pub fn estimate(&self) -> f64 {
         let mut values: [Bf16; N] = self.values;
         let q1 = values
@@ -75,8 +80,11 @@ impl<const N: usize> SizeSketch<N> {
     }
 }
 
+/// Lowest-memory sketch variant.
 pub type LowPrecisionSizeSketch = SizeSketch<7>;
+/// Balanced sketch variant used by default.
 pub type MediumPrecisionSizeSketch = SizeSketch<31>;
+/// Highest-accuracy sketch variant.
 pub type HighPrecisionSizeSketch = SizeSketch<127>;
 
 #[cfg(test)]

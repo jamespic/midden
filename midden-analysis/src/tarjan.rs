@@ -3,6 +3,7 @@ use std::{cmp::min, collections::HashMap, hash::Hash, vec::IntoIter};
 
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
+/// Callback interface for the iterative SCC traversal.
 pub trait GraphSCCVisitor {
     type NodeT;
     type NodeIdT: Eq + Hash + Copy;
