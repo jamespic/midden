@@ -1,6 +1,8 @@
 use core::panic;
 use std::{cmp::min, collections::HashMap, hash::Hash, vec::IntoIter};
 
+use xxhash_rust::xxh3::Xxh3DefaultBuilder;
+
 pub trait GraphSCCVisitor {
     type NodeT;
     type NodeIdT: Eq + Hash + Copy;
@@ -52,12 +54,12 @@ struct BookkeepingEntry {
 }
 
 struct TarjanState<V: GraphSCCVisitor> {
-    bookkeeping: HashMap<V::NodeIdT, BookkeepingEntry>,
+    bookkeeping: HashMap<V::NodeIdT, BookkeepingEntry, Xxh3DefaultBuilder>,
     call_stack: Vec<CallStackFrame<V>>,
     stack: Vec<V::NodeIdT>,
     index: usize,
     next_scc_index: usize,
-    scc_accs: HashMap<usize, V::SCCAccT>,
+    scc_accs: HashMap<usize, V::SCCAccT, Xxh3DefaultBuilder>,
 }
 
 enum CallStackFrameState<V: GraphSCCVisitor> {
@@ -109,12 +111,12 @@ impl<V: GraphSCCVisitor> TarjanState<V> {
 
 pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) -> Result<(), V::ErrorT> {
     let mut state: TarjanState<V> = TarjanState {
-        bookkeeping: HashMap::new(),
+        bookkeeping: HashMap::with_hasher(Xxh3DefaultBuilder::new()),
         call_stack: Vec::new(),
         stack: Vec::new(),
         index: 0,
         next_scc_index: 0,
-        scc_accs: HashMap::new(),
+        scc_accs: HashMap::with_hasher(Xxh3DefaultBuilder::new()),
     };
 
     loop {
