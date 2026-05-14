@@ -1,49 +1,55 @@
-from typing import Type
-import pytest
-from midden_analysis import (
-    SummedRadixTree,
-    LowPrecisionSizeSketch,
-    MediumPrecisionSizeSketch,
-    HighPrecisionSizeSketch,
-)
+from pathlib import Path
+import json
+
+from midden_analysis import HeapDumpExplorer, EstimatorPrecision
+
+TEST_DATA = [
+    json.dumps(x).encode("utf-8")
+    for x in [
+        {"id": 1, "type": "builtins.module", "references": [2, 3, 5], "size": 10},
+        {"id": 2, "type": "builtins.list", "references": [4], "size": 20},
+        {"id": 3, "type": "builtins.dict", "references": [4], "size": 30},
+        {"id": 4, "type": "builtins.str", "references": [], "size": 40},
+        {"id": 5, "type": "builtins.module", "references": [], "size": 1000},
+    ]
+]
 
 
-def test_happy_path_summed_radix_tree():
-    tree = SummedRadixTree()
-    tree = tree.add(1, 10)
-    tree = tree.add(2, 20)
-    tree += (3, 30)
+def test_heap_dump_explorer_exact_precision(tmp_path: Path):
+    explorer = HeapDumpExplorer(str(tmp_path))
+    explorer.import_lines(TEST_DATA, estimator_precision=EstimatorPrecision.Exact)
 
-    assert tree.contains(1)
-    assert tree.contains(2)
-    assert 3 in tree
-    assert 4 not in tree
+    obj_1 = explorer.get_object(1)
+    assert obj_1 is not None
+    assert obj_1.type == "builtins.module"
+    assert obj_1.size == 10
+    assert obj_1.subtree_size == 100
+    assert {ref.id for ref in obj_1.references} == {2, 3, 5}
 
-    assert tree[1] == 10
-    assert tree[2] == 20
-    assert tree[3] == 30
+    obj_6 = explorer.get_object(6)
+    assert obj_6 is None
 
-    assert tree == SummedRadixTree({1: 10, 2: 20, 3: 30})
-    assert str(tree) == "SummedRadixTree({1: 10, 2: 20, 3: 30})"
+    path = explorer.find_path_between_objects(1, 4, {2})
+    assert path is not None
+    assert [obj.id for obj in path] == [1, 3, 4]
 
-    assert tree.total() == 60
+    path_to_5 = explorer.find_path_between_objects(1, 5, set())
+    assert path_to_5 is None
 
+    assert explorer.get_count_for_type("builtins.module") == 2
+    assert explorer.get_count_for_type("All Types") == 5
+    type_summaries = dict(explorer.get_type_summaries())
+    assert len(type_summaries) == 5
+    assert type_summaries["builtins.module"].count == 2
+    assert type_summaries["builtins.module"].total_size == 1010
+    assert type_summaries["All Types"].count == 5
+    assert type_summaries["All Types"].total_size == 1100
 
-@pytest.mark.parametrize(
-    "sketch_class",
-    [LowPrecisionSizeSketch, MediumPrecisionSizeSketch, HighPrecisionSizeSketch],
-)
-def test_happy_path_size_sketches(
-    sketch_class: Type[
-        LowPrecisionSizeSketch | MediumPrecisionSizeSketch | HighPrecisionSizeSketch
-    ],
-):
-    sketch = sketch_class()
-    sketch.add(1, 10)
-    sketch.add(2, 20)
-    sketch.add(3, 30)
-    sketch.add(4, 40)
-
-    assert (
-        20 <= sketch.total() <= 300
-    )  # These are very rough bounds, since the sketch is probabilistic
+    assert len(explorer.get_objects_by_type("builtins.module", page=None)) == 2
+    assert len(explorer.get_objects_by_type("builtins.list", page=None)) == 1
+    object_by_size = explorer.get_objects_by_type_ordered_by_size(
+        "builtins.module", subtree_size=False, page=None
+    )
+    assert len(object_by_size) == 2
+    assert object_by_size[0].id == 5
+    assert object_by_size[1].id == 1

@@ -16,7 +16,7 @@ pub trait GraphSCCVisitor {
     ) -> Result<Option<Self::NodeT>, Self::ErrorT>;
     fn get_node_id(&self, node: &Self::NodeT) -> Self::NodeIdT;
     fn get_node_acc(&self, node: &Self::NodeT) -> Self::NodeAccT;
-    fn get_successors(&self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT>;
+    fn get_successors(&mut self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT>;
     fn accumulate_node_values(&self, v1: &mut Self::NodeAccT, v2: &Self::NodeAccT);
     fn accumulate_scc_values(&self, v1: &mut Self::SCCAccT, v2: &Self::SCCAccT);
     fn add_node_value_to_scc_value(
@@ -82,7 +82,7 @@ struct CallStackFrame<V: GraphSCCVisitor> {
 }
 
 impl<V: GraphSCCVisitor> TarjanState<V> {
-    fn push_new_frame(&mut self, visitor: &V, node: V::NodeT) -> Result<(), V::ErrorT> {
+    fn push_new_frame(&mut self, visitor: &mut V, node: V::NodeT) -> Result<(), V::ErrorT> {
         let node_index = self.index;
         self.index += 1;
         let node_id = visitor.get_node_id(&node);
@@ -130,7 +130,7 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) -> Result<(), V::ErrorT> 
                         if !state.bookkeeping.contains_key(&successor_id) {
                             frame.state = CallStackFrameState::ChildWait;
                             state.call_stack.push(frame);
-                            state.push_new_frame(&visitor, successor)?;
+                            state.push_new_frame(visitor, successor)?;
                         } else {
                             let successor_entry = &state.bookkeeping[&successor_id];
                             if successor_entry.on_stack {
@@ -224,7 +224,7 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) -> Result<(), V::ErrorT> 
             if let Some(node) = next_node {
                 // Handle dodgy iterator implementations that might return the same node multiple times
                 if !state.bookkeeping.contains_key(&visitor.get_node_id(&node)) {
-                    state.push_new_frame(&visitor, node)?; // Handle dodgy iterator implementations that might return the same node multiple times
+                    state.push_new_frame(visitor, node)?; // Handle dodgy iterator implementations that might return the same node multiple times
                 }
             } else {
                 return Ok(());
@@ -288,7 +288,7 @@ mod tests {
             HashSet::from([*node])
         }
 
-        fn get_successors(&self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT> {
+        fn get_successors(&mut self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT> {
             Ok(self.graph[&node].clone())
         }
 

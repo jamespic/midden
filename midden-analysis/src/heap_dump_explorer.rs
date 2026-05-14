@@ -15,7 +15,7 @@ use heed::{
 };
 // """A class that allows exploring heap dumps exported by dump_heap.py.
 // It uses LMDB to store the data on disk and provides methods for querying objects, their types, and their relationships.
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyString};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -223,7 +223,7 @@ pub enum EstimatorPrecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[pyclass(frozen, skip_from_py_object, get_all)]
+
 enum Type {
     AllTypes(),
     TypeName(String),
@@ -246,13 +246,17 @@ impl<'a, 'py> FromPyObject<'a, 'py> for Type {
     }
 }
 
-#[pymethods]
-impl Type {
-    fn __str__(&self) -> String {
-        match self {
+impl<'py> IntoPyObject<'py> for Type {
+    type Target = PyString;
+    type Output = Bound<'py, PyString>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        let s = match self {
             Type::AllTypes() => ALL_TYPES.to_string(),
-            Type::TypeName(name) => name.clone(),
-        }
+            Type::TypeName(name) => name,
+        };
+        Ok(PyString::new(py, &s).into())
     }
 }
 
@@ -621,6 +625,7 @@ impl HeapDumpExplorer {
                 .get(&rtxn, &start_id)?
                 .ok_or_else(|| anyhow::anyhow!("Start ID {} not found in database", start_id))?,
         );
+
         let mut predecessors = HashMap::new();
         predecessors.insert(start_id, None); // Doubles as a visited set
         let mut dead_ends = HashSet::new();
@@ -694,15 +699,8 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
     ) -> Result<Option<Self::NodeT>, Self::ErrorT> {
         while let Some(item) = self.ro_iter.next() {
             let (node_id, record): (Self::NodeIdT, Lazy<SerdeJson<ObjectRecordNoValue>>) = item?;
-            if self.known_skips.contains(&node_id) {
-                continue;
-            }
             if !already_visited(&node_id) {
                 let record = record.decode().map_err(|e| HeedError::Decoding(e))?;
-                if should_skip_link_in_subtree_exploration(&record) {
-                    self.known_skips.insert(node_id);
-                    continue;
-                }
                 return Ok(Some(record));
             }
         }
@@ -717,18 +715,27 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         node.size as usize
     }
 
-    fn get_successors(&self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT> {
+    fn get_successors(&mut self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT> {
         let remapped_db = self
             .explorer
             .primary_db
             .remap_data_type::<SerdeJson<ObjectRecordNoValue>>();
-        let results = collect_results(node.references.iter().map(|succ_id| {
+        let results = collect_results(node.references.iter().filter_map(|succ_id| {
+            if self.known_skips.contains(&*succ_id) {
+                return None;
+            }
+
             match remapped_db.get(&self.ro_txn, succ_id) {
-                Ok(Some(record)) => Ok(record),
-                Ok(None) => Err(HeedError::Decoding(
-                    format!("Missing record for successor ID {}", succ_id).into(),
-                )),
-                Err(e) => Err(e),
+                Ok(Some(record)) => {
+                    if should_skip_link_in_subtree_exploration(&record) {
+                        self.known_skips.insert(*succ_id);
+                        None
+                    } else {
+                        Some(Ok(record))
+                    }
+                }
+                Ok(None) => None,
+                Err(e) => Some(Err(e)),
             }
         }))?;
         Ok(results)
