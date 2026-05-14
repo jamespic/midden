@@ -636,16 +636,20 @@ impl HeapDumpExplorer {
         let remapped_db = self
             .primary_db
             .remap_data_type::<SerdeJson<ObjectRecordNoValue>>();
-        let mut queue = VecDeque::new();
-        queue.push_back(start_id);
+        let mut queue: VecDeque<ObjectRecordNoValue> = VecDeque::new();
+        queue.push_back(
+            remapped_db
+                .get(&rtxn, &start_id)?
+                .ok_or_else(|| anyhow::anyhow!("Start ID {} not found in database", start_id))?,
+        );
         let mut predecessors = HashMap::new();
         predecessors.insert(start_id, None); // Doubles as a visited set
         let mut dead_ends = HashSet::new();
-        while let Some(current_id) = queue.pop_front() {
-            if current_id == end_id {
+        while let Some(current_obj) = queue.pop_front() {
+            if current_obj.id == end_id {
                 // Reconstruct path
                 let mut path = Vec::new();
-                let mut current_opt = Some(current_id);
+                let mut current_opt = Some(current_obj.id);
                 while let Some(current_id) = current_opt {
                     let summary = self.get_summary(&rtxn, current_id)?;
                     path.push(summary);
@@ -653,27 +657,24 @@ impl HeapDumpExplorer {
                 }
                 return Ok(Some(path.into_iter().rev().collect()));
             }
-            if dead_ends.contains(&current_id) {
-                continue; // Skip known dead ends
-            }
-
-            let object_record = remapped_db.get(&rtxn, &current_id)?.ok_or_else(|| {
-                anyhow::anyhow!(format!(
-                    "Decoding error: Missing record for ID {}",
-                    current_id
-                ))
-            })?;
-            if should_skip_link_in_subtree_exploration(&object_record) {
-                dead_ends.insert(current_id);
-                continue;
-            }
-            for ref_id in object_record.references {
+            for ref_id in current_obj.references {
+                if dead_ends.contains(&ref_id) {
+                    continue; // Skip known dead ends
+                }
                 if avoiding_ids.contains(&ref_id) {
                     continue;
                 }
+                let obj = remapped_db.get(&rtxn, &ref_id)?.ok_or_else(|| {
+                    anyhow::anyhow!("Decoding error: Missing record for ID {}", ref_id)
+                })?;
+                if should_skip_link_in_subtree_exploration(&obj) {
+                    dead_ends.insert(ref_id);
+                    continue;
+                }
+
                 if !predecessors.contains_key(&ref_id) {
-                    predecessors.insert(ref_id, Some(current_id));
-                    queue.push_back(ref_id);
+                    predecessors.insert(ref_id, Some(current_obj.id));
+                    queue.push_back(obj);
                 }
             }
         }
