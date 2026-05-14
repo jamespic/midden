@@ -53,6 +53,7 @@ impl SummedRadixTree {
         }
     }
 
+    #[allow(unused)] // Used in test configurations, but not in production code, so allow it to be unused.
     pub fn contains(&self, position: usize) -> bool {
         self.get_value(position) > 0
     }

@@ -25,9 +25,9 @@ pub trait GraphSCCVisitor {
     ) -> Self::SCCAccT;
     fn emit_result(
         &mut self,
-        node_id: Self::NodeIdT,
-        node_acc_this_scc: Self::NodeAccT,
-        scc_acc: Self::SCCAccT,
+        node_id: &Self::NodeIdT,
+        node_acc_this_scc: &Self::NodeAccT,
+        scc_acc: &Self::SCCAccT,
     ) -> Result<(), Self::ErrorT>;
     fn _acc_scc_options(
         &self,
@@ -198,9 +198,9 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) -> Result<(), V::ErrorT> 
 
                         for member_id in scc_members {
                             visitor.emit_result(
-                                member_id,
-                                frame.node_acc.clone(),
-                                frame.scc_acc.clone().unwrap(),
+                                &member_id,
+                                &frame.node_acc,
+                                &frame.scc_acc.as_ref().unwrap(),
                             )?;
                         }
                         None
@@ -313,12 +313,12 @@ mod tests {
 
         fn emit_result(
             &mut self,
-            node_id: Self::NodeIdT,
-            node_acc_this_scc: Self::NodeAccT,
-            scc_acc: Self::SCCAccT,
+            node_id: &Self::NodeIdT,
+            node_acc_this_scc: &Self::NodeAccT,
+            scc_acc: &Self::SCCAccT,
         ) -> Result<(), Self::ErrorT> {
             self.results
-                .insert(node_id, (node_acc_this_scc.clone(), scc_acc.clone()));
+                .insert(*node_id, (node_acc_this_scc.clone(), scc_acc.clone()));
             Ok(())
         }
     }

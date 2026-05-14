@@ -49,6 +49,7 @@ impl<const N: usize> SizeSketch<N> {
         }
     }
 
+    #[allow(unused)]  // Used in test configurations, but not in production code, so allow it to be unused.
     pub fn union(&self, other: &Self) -> Self {
         let mut result = Self::new();
         for i in 0..N {

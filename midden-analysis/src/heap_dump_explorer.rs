@@ -777,9 +777,9 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
 
     fn emit_result(
         &mut self,
-        node_id: Self::NodeIdT,
-        _node_acc_this_scc: Self::NodeAccT,
-        scc_acc: Self::SCCAccT,
+        node_id: &Self::NodeIdT,
+        _node_acc_this_scc: &Self::NodeAccT,
+        scc_acc: &Self::SCCAccT,
     ) -> Result<(), Self::ErrorT> {
         let mut record = self
             .explorer
@@ -798,7 +798,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
             &Type::TypeName(record.r#type),
             &SizeIndexEntry {
                 size: subtree_size,
-                obj_id: node_id,
+                obj_id: *node_id,
             },
             self.explorer.types_subtree_size_index_db,
         )?;
