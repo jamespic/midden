@@ -1,6 +1,7 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 use float16::Bf16;
+use xxhash_rust::xxh3::Xxh3Default;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SizeSketch<const N: usize> {
@@ -33,7 +34,7 @@ impl<const N: usize> SizeSketch<N> {
 
     pub fn add<I: Hash>(&mut self, id: I, value: f64) {
         for i in 0..N {
-            let mut hasher = DefaultHasher::new();
+            let mut hasher = Xxh3Default::new();
             hasher.write_usize(i);
             id.hash(&mut hasher);
             let hash = hasher.finish();
@@ -49,7 +50,7 @@ impl<const N: usize> SizeSketch<N> {
         }
     }
 
-    #[allow(unused)]  // Used in test configurations, but not in production code, so allow it to be unused.
+    #[allow(unused)] // Used in test configurations, but not in production code, so allow it to be unused.
     pub fn union(&self, other: &Self) -> Self {
         let mut result = Self::new();
         for i in 0..N {
