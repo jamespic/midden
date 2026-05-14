@@ -292,54 +292,35 @@ pub struct HeapDumpExplorer {
     type_summaries_db: Database<Type, TypeSummary>,
 }
 
-trait RollbackOnErr {
-    fn rollback_on_err<T, E>(self, f: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E>;
-}
-
-impl<'a> RollbackOnErr for heed::RwTxn<'a> {
-    fn rollback_on_err<T, E>(mut self, f: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
-        match f(&mut self) {
-            Ok(result) => {
-                self.commit().unwrap(); // FIXME: I'll swing back and fix this when I switch this all over to use anyhow
-                Ok(result)
-            }
-            Err(e) => {
-                self.abort();
-                Err(e)
-            }
-        }
-    }
-}
-
 impl HeapDumpExplorer {
     fn just_import_lines<'a>(&self, lines: &Bound<'_, PyAny>) -> anyhow::Result<()> {
-        self.env.write_txn()?.rollback_on_err(|mut tx| {
-            for item in lines.try_iter()? {
-                let item = item?;
-                let line_result: PyResult<_> = item.extract::<&[u8]>().map_err(|e| e.into());
-                let line = line_result?;
-                let record: RawObjectRecord = serde_json::from_slice(line)?;
-                self.primary_db.put(&mut tx, &record.id, &record)?;
+        let mut tx = self.env.write_txn()?;
+        for item in lines.try_iter()? {
+            let item = item?;
+            let line_result: PyResult<_> = item.extract::<&[u8]>().map_err(|e| e.into());
+            let line = line_result?;
+            let record: RawObjectRecord = serde_json::from_slice(line)?;
+            self.primary_db.put(&mut tx, &record.id, &record)?;
 
-                for reference in &record.references {
-                    self.referrers_db.put(&mut tx, reference, &record.id)?;
-                }
-
-                let type_key = Type::TypeName(record.r#type.clone());
-                self.types_db.put(&mut tx, &type_key, &record.id)?;
-                self.types_db.put(&mut tx, &Type::AllTypes(), &record.id)?;
-                self.put_size_index_entry(
-                    tx,
-                    &type_key,
-                    &SizeIndexEntry {
-                        size: record.size,
-                        obj_id: record.id,
-                    },
-                    self.types_size_index_db,
-                )?;
+            for reference in &record.references {
+                self.referrers_db.put(&mut tx, reference, &record.id)?;
             }
-            Ok(())
-        })
+
+            let type_key = Type::TypeName(record.r#type.clone());
+            self.types_db.put(&mut tx, &type_key, &record.id)?;
+            self.types_db.put(&mut tx, &Type::AllTypes(), &record.id)?;
+            self.put_size_index_entry(
+                tx,
+                &type_key,
+                &SizeIndexEntry {
+                    size: record.size,
+                    obj_id: record.id,
+                },
+                self.types_size_index_db,
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     fn put_size_index_entry(
@@ -358,27 +339,24 @@ impl HeapDumpExplorer {
         &self,
         estimator_precision: EstimatorPrecision,
     ) -> anyhow::Result<()> {
-        self.env.write_txn()?.rollback_on_err(|mut tx| {
-            self.build_type_summaries(&mut tx)?;
-            match estimator_precision {
-                EstimatorPrecision::NoEstimates => Ok(()), // Don't build any sketches, so we can save time and space if the user doesn't care about estimates.
-                EstimatorPrecision::Low => self
-                    .explore_strongly_connected_components::<'_, '_, LowPrecisionSizeSketch>(
-                        &mut tx,
-                    ),
-                EstimatorPrecision::Medium => self
-                    .explore_strongly_connected_components::<'_, '_, MediumPrecisionSizeSketch>(
-                        &mut tx,
-                    ),
-                EstimatorPrecision::High => self
-                    .explore_strongly_connected_components::<'_, '_, HighPrecisionSizeSketch>(
-                        &mut tx,
-                    ),
-                EstimatorPrecision::Exact => self
-                    .explore_strongly_connected_components::<'_, '_, Rc<SummedRadixTree>>(&mut tx),
-            }?;
-            Ok(())
-        })
+        let mut tx = self.env.write_txn()?;
+        self.build_type_summaries(&mut tx)?;
+        match estimator_precision {
+            EstimatorPrecision::NoEstimates => Ok(()), // Don't build any sketches, so we can save time and space if the user doesn't care about estimates.
+            EstimatorPrecision::Low => self
+                .explore_strongly_connected_components::<'_, '_, LowPrecisionSizeSketch>(&mut tx),
+            EstimatorPrecision::Medium => self
+                .explore_strongly_connected_components::<'_, '_, MediumPrecisionSizeSketch>(
+                    &mut tx,
+                ),
+            EstimatorPrecision::High => self
+                .explore_strongly_connected_components::<'_, '_, HighPrecisionSizeSketch>(&mut tx),
+            EstimatorPrecision::Exact => {
+                self.explore_strongly_connected_components::<'_, '_, Rc<SummedRadixTree>>(&mut tx)
+            }
+        }?;
+        tx.commit()?;
+        Ok(())
     }
 
     fn build_type_summaries(&self, tx: &mut heed::RwTxn) -> heed::Result<()> {
