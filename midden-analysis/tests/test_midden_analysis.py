@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 import json
 
 from midden_analysis import HeapDumpExplorer, EstimatorPrecision
@@ -15,15 +16,31 @@ TEST_DATA = [
 ]
 
 
-def test_heap_dump_explorer_exact_precision(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("estimator_precision", "margin_for_error"),
+    [
+        pytest.param(EstimatorPrecision.Exact, 0, id="exact"),
+        pytest.param(EstimatorPrecision.High, 15, id="high"),
+        pytest.param(EstimatorPrecision.Medium, 30, id="medium"),
+        pytest.param(EstimatorPrecision.Low, 60, id="low"),
+        pytest.param(EstimatorPrecision.NoEstimates, None, id="no_estimates"),
+    ],
+)
+def test_heap_dump_explorer(
+    tmp_path: Path,
+    estimator_precision: EstimatorPrecision,
+    margin_for_error: int | None,
+):
     explorer = HeapDumpExplorer(str(tmp_path))
-    explorer.import_lines(TEST_DATA, estimator_precision=EstimatorPrecision.Exact)
+    explorer.import_lines(TEST_DATA, estimator_precision=estimator_precision)
 
     obj_1 = explorer.get_object(1)
     assert obj_1 is not None
     assert obj_1.type == "builtins.module"
     assert obj_1.size == 10
-    assert obj_1.subtree_size == 100
+    if margin_for_error is not None:
+        assert obj_1.subtree_size is not None
+        assert 100 - margin_for_error <= obj_1.subtree_size <= 100 + margin_for_error
     assert {ref.id for ref in obj_1.references} == {2, 3, 5}
 
     obj_6 = explorer.get_object(6)
