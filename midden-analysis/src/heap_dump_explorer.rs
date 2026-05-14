@@ -310,7 +310,7 @@ impl HeapDumpExplorer {
             self.types_db.put(&mut tx, &type_key, &record.id)?;
             self.types_db.put(&mut tx, &Type::AllTypes(), &record.id)?;
             self.put_size_index_entry(
-                tx,
+                &mut tx,
                 &type_key,
                 &SizeIndexEntry {
                     size: record.size,
