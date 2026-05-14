@@ -3,13 +3,13 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
     marker::PhantomData,
+    rc::Rc,
     str::FromStr,
-    sync::Arc,
 };
 
 use heed::{
     BytesDecode, BytesEncode, Database, DatabaseFlags, Env, EnvOpenOptions, Error as HeedError,
-    IntegerComparator,
+    IntegerComparator, WithoutTls,
     byteorder::NativeEndian,
     types::{Lazy, LazyDecode, SerdeJson, U64},
 };
@@ -22,7 +22,7 @@ use crate::{
     size_sketch::{
         HighPrecisionSizeSketch, LowPrecisionSizeSketch, MediumPrecisionSizeSketch, SizeSketch,
     },
-    summed_radix_tree::{EMPTY, SummedRadixTree},
+    summed_radix_tree::SummedRadixTree,
     tarjan::{self, GraphSCCVisitor},
 };
 use anyhow;
@@ -194,9 +194,9 @@ impl<const N: usize> SizeEstimator for SizeSketch<N> {
     }
 }
 
-impl SizeEstimator for Arc<SummedRadixTree> {
+impl SizeEstimator for Rc<SummedRadixTree> {
     fn empty() -> Self {
-        EMPTY.clone()
+        SummedRadixTree::new()
     }
 
     fn add_in_place(&mut self, element: u64, value: u64) {
@@ -283,7 +283,7 @@ impl<'txn> BytesDecode<'txn> for Type {
 
 #[pyclass]
 pub struct HeapDumpExplorer {
-    env: Env,
+    env: Env<WithoutTls>,
     primary_db: Database<IdDbType, SerdeJson<RawObjectRecord>, IntegerComparator>,
     referrers_db: Database<IdDbType, IdDbType, IntegerComparator>,
     types_db: Database<Type, IdDbType>,
@@ -375,7 +375,7 @@ impl HeapDumpExplorer {
                         &mut tx,
                     ),
                 EstimatorPrecision::Exact => self
-                    .explore_strongly_connected_components::<'_, '_, Arc<SummedRadixTree>>(&mut tx),
+                    .explore_strongly_connected_components::<'_, '_, Rc<SummedRadixTree>>(&mut tx),
             }?;
             Ok(())
         })
@@ -480,6 +480,7 @@ impl HeapDumpExplorer {
     fn new(db_path: String) -> anyhow::Result<Self> {
         let env = unsafe {
             EnvOpenOptions::new()
+                .read_txn_without_tls()
                 .map_size(10 * 1024 * 1024 * 1024)
                 .max_dbs(7)
                 .open(db_path)
@@ -814,37 +815,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_value_deserialization() {
-        assert_eq!(
-            serde_json::from_str::<Value>("true").unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>("false").unwrap(),
-            Value::Bool(false)
-        );
-        assert_eq!(serde_json::from_str::<Value>("42").unwrap(), Value::Int(42));
-        assert_eq!(
-            serde_json::from_str::<Value>("3.14").unwrap(),
-            Value::Float(3.14)
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>(r#""hello""#).unwrap(),
-            Value::Str("hello".to_string())
-        );
-        assert_eq!(serde_json::from_str::<Value>("null").unwrap(), Value::None);
-    }
-
-    #[test]
     fn test_object_summary_deserialization() {
-        let json = r#"{"id": 1, "type": "int", "value": 42, "size": 28, "subtree_size": 100, "references": []}"#;
+        let json = r#"{"id": 1, "type": "int", "value": "42", "size": 28, "subtree_size": 100, "references": []}"#;
         let summary: ObjectSummary = serde_json::from_str(json).unwrap();
         assert_eq!(
             summary,
             ObjectSummary {
                 id: 1,
                 r#type: "int".to_string(),
-                value: Some(Value::Int(42)),
+                value: Some("42".to_string()),
                 size: 28,
                 subtree_size: Some(100),
             }

@@ -1,7 +1,4 @@
-use std::{
-    array,
-    sync::{Arc, LazyLock},
-};
+use std::{array, rc::Rc};
 
 use xxhash_rust::xxh3::Xxh3Default;
 
@@ -17,16 +14,20 @@ pub enum SummedRadixTree {
     },
     Branch {
         level: u8,
-        children: [Arc<SummedRadixTree>; FANOUT],
+        children: [Rc<SummedRadixTree>; FANOUT],
         hash: u128,
         total: u64,
     },
 }
 
-pub static EMPTY: LazyLock<Arc<SummedRadixTree>> =
-    LazyLock::new(|| Arc::new(SummedRadixTree::Empty));
+thread_local! {
+    static EMPTY: Rc<SummedRadixTree> = Rc::new(SummedRadixTree::Empty);
+}
 
 impl SummedRadixTree {
+    pub fn new() -> Rc<Self> {
+        EMPTY.with(|empty| empty.clone())
+    }
     pub fn get_value(&self, position: usize) -> u64 {
         match self {
             Self::Empty => 0,
@@ -52,6 +53,10 @@ impl SummedRadixTree {
         }
     }
 
+    pub fn contains(&self, position: usize) -> bool {
+        self.get_value(position) > 0
+    }
+
     pub fn unique_hash(&self) -> u128 {
         match self {
             Self::Empty => 0,
@@ -68,21 +73,21 @@ impl SummedRadixTree {
         }
     }
 
-    pub fn add(self: &Arc<Self>, position: usize, value: u64) -> Arc<Self> {
+    pub fn add(self: &Rc<Self>, position: usize, value: u64) -> Rc<Self> {
         if self.get_value(position) == value {
             self.clone()
         } else {
             let single_position_set = Self::_with_single_position_set(position, value);
-            self.union(&Arc::new(single_position_set))
+            self.union(&Rc::new(single_position_set))
         }
     }
 
-    pub fn union<'a>(self: &Arc<Self>, other: &Arc<Self>) -> Arc<Self> {
+    pub fn union<'a>(self: &Rc<Self>, other: &Rc<Self>) -> Rc<Self> {
         match (self.as_ref(), other.as_ref()) {
             (Self::Empty, _) => other.clone(),
             (_, Self::Empty) => self.clone(),
             (s, o) if s.unique_hash() == o.unique_hash() => {
-                if Arc::strong_count(self) >= Arc::strong_count(other) {
+                if Rc::strong_count(self) >= Rc::strong_count(other) {
                     self.clone()
                 } else {
                     other.clone()
@@ -101,7 +106,7 @@ impl SummedRadixTree {
                 new_children[0] = new_children[0].clone().union(other);
                 let hash = Self::_calculate_branch_hash(&new_children);
                 let total = new_children.iter().map(|child| child.total()).sum();
-                Arc::new(Self::Branch {
+                Rc::new(Self::Branch {
                     level: *level,
                     children: new_children,
                     hash,
@@ -126,7 +131,7 @@ impl SummedRadixTree {
                         new_children[0] = new_children[0].clone().union(other);
                         let hash = Self::_calculate_branch_hash(&new_children);
                         let total = new_children.iter().map(|child| child.total()).sum();
-                        Arc::new(Self::Branch {
+                        Rc::new(Self::Branch {
                             level: *l1,
                             children: new_children,
                             hash,
@@ -140,7 +145,7 @@ impl SummedRadixTree {
                         let new_children = array::from_fn(|i| c1[i].clone().union(&c2[i]));
                         let hash = Self::_calculate_branch_hash(&new_children);
                         let total = new_children.iter().map(|child| child.total()).sum();
-                        Arc::new(Self::Branch {
+                        Rc::new(Self::Branch {
                             level: *l1,
                             children: new_children,
                             hash,
@@ -156,7 +161,7 @@ impl SummedRadixTree {
                     let new_values = array::from_fn(|i| v1[i].max(v2[i]));
                     let hash = Self::_calculate_leaf_hash(&new_values);
                     let total = new_values.iter().sum();
-                    Arc::new(Self::Leaf {
+                    Rc::new(Self::Leaf {
                         values: new_values,
                         hash,
                         total,
@@ -184,8 +189,8 @@ impl SummedRadixTree {
         while child_index > 0 {
             let parent_index = child_index % FANOUT;
             child_index /= FANOUT;
-            let mut children: [Arc<Self>; FANOUT] = array::from_fn(|_| EMPTY.clone());
-            children[parent_index] = Arc::new(result);
+            let mut children: [Rc<Self>; FANOUT] = array::from_fn(|_| SummedRadixTree::new());
+            children[parent_index] = Rc::new(result);
             let hash = Self::_calculate_branch_hash(&children);
             let new_branch = Self::Branch {
                 level: current_level,
@@ -200,7 +205,7 @@ impl SummedRadixTree {
         result
     }
 
-    fn _calculate_branch_hash(children: &[Arc<Self>; FANOUT]) -> u128 {
+    fn _calculate_branch_hash(children: &[Rc<Self>; FANOUT]) -> u128 {
         let mut hasher = Xxh3Default::new();
         for child in children {
             let child_hash = child.unique_hash();
@@ -231,76 +236,70 @@ impl SummedRadixTree {
         }
     }
 
-    pub fn _estimate_size_fudging_refcounts(self: &Arc<Self>) -> usize {
-        return (self._estimate_size() / Arc::strong_count(&self)) + size_of::<Arc<()>>();
+    pub fn _estimate_size_fudging_refcounts(self: &Rc<Self>) -> usize {
+        return (self._estimate_size() / Rc::strong_count(&self)) + size_of::<Rc<()>>();
     }
 }
 
-pub struct SummedRadixTreeIterator {
-    tree: Arc<SummedRadixTree>,
-    offset: usize,
-    child_index: usize,
-    child_iter: Option<Box<SummedRadixTreeIterator>>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl SummedRadixTreeIterator {
-    pub fn new(tree: Arc<SummedRadixTree>, offset: usize) -> Self {
-        Self {
-            tree,
-            offset,
-            child_index: 0,
-            child_iter: None,
-        }
+    #[test]
+    fn test_basic_operations() {
+        let tree = SummedRadixTree::new();
+        assert!(!tree.contains(5));
+        let tree = tree.add(5, 10);
+        assert!(tree.contains(5));
+        assert_eq!(tree.total(), 10);
+
+        let tree2 = SummedRadixTree::new().add(5, 15).add(10, 20);
+        let union_tree = tree.union(&tree2);
+        assert!(union_tree.contains(5));
+        assert!(union_tree.contains(10));
+        assert_eq!(union_tree.total(), 35);
     }
-}
 
-impl Iterator for SummedRadixTreeIterator {
-    type Item = (usize, u64);
+    fn compare_with_naive_implementation(values: Vec<Vec<(usize, u64)>>) {
+        let mut naive_map = std::collections::HashMap::new();
+        let mut tree = SummedRadixTree::new();
 
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.tree.as_ref() {
-            SummedRadixTree::Empty => None,
-            SummedRadixTree::Leaf { values, .. } => {
-                while self.child_index < FANOUT {
-                    let value = values[self.child_index];
-                    let current_offset = self.offset + self.child_index;
-                    self.child_index += 1;
-                    if value > 0 {
-                        return Some((current_offset, value));
-                    }
-                }
-                None
+        for subset in values {
+            let mut inner_tree = SummedRadixTree::new();
+            for (element, value) in subset {
+                inner_tree = inner_tree.add(element, value);
+                naive_map.insert(element, value);
             }
-            SummedRadixTree::Branch {
-                level, children, ..
-            } => {
-                if let Some(child_iter) = &mut self.child_iter {
-                    if let Some(item) = child_iter.next() {
-                        return Some(item);
-                    } else {
-                        self.child_iter = None; // Finished with this child
-                    }
-                }
-
-                while self.child_index < FANOUT {
-                    let child = &children[self.child_index];
-                    let current_offset =
-                        self.offset + self.child_index * FANOUT.pow((*level) as u32);
-                    self.child_index += 1;
-                    if child.total() > 0 {
-                        self.child_iter = Some(Box::new(SummedRadixTreeIterator::new(
-                            child.clone(),
-                            current_offset,
-                        )));
-                        if let Some(item) = self.child_iter.as_mut().unwrap().next() {
-                            return Some(item);
-                        } else {
-                            self.child_iter = None; // Finished with this child
-                        }
-                    }
-                }
-                None
-            }
+            tree = tree.union(&inner_tree);
         }
+
+        for (element, value) in &naive_map {
+            assert!(tree.contains(*element));
+            assert_eq!(tree.get_value(*element), *value);
+        }
+        assert!(tree.total() == naive_map.values().sum::<u64>());
     }
+
+    macro_rules! generate_tests {
+        ($($name:ident: $values:expr),+) => {
+            $(
+                #[test]
+                fn $name() {
+                    compare_with_naive_implementation($values);
+                }
+            )*
+        };
+    }
+
+    generate_tests!(
+        test_single_element: vec![vec![(5, 10)]],
+        test_multiple_elements: vec![vec![(5, 10), (10, 20), (15, 30)]],
+        test_overlapping_elements: vec![vec![(5, 10)], vec![(5, 15)], vec![(10, 20)]],
+        test_large_numbers: vec![vec![(1000, 1), (2000, 2)], vec![(1000, 3), (3000, 4)]],
+        test_empty_tree: vec![],
+        test_powers_of_two: vec![vec![(0, 1), (8, 2), (64, 3), (512, 4)]],
+        test_descending_powers_of_two: vec![vec![(512, 4), (64, 3), (8, 2), (0, 1)]],
+        test_one_to_ten: vec![(0..10).map(|i| (i, i as u64 + 1)).collect()],
+        test_descending_one_to_ten: vec![(0..10).rev().map(|i| (i, i as u64 + 1)).collect()]
+    );
 }
