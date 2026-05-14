@@ -65,6 +65,7 @@ struct ObjectRecordNoValue {
     r#type: String,
     references: Vec<Id>,
     size: u64,
+    subtree_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -625,11 +626,24 @@ impl HeapDumpExplorer {
                 .get(&rtxn, &start_id)?
                 .ok_or_else(|| anyhow::anyhow!("Start ID {} not found in database", start_id))?,
         );
+        let endpoint = remapped_db
+            .get(&rtxn, &end_id)?
+            .ok_or_else(|| anyhow::anyhow!("End ID {} not found in database", end_id))?;
+        let endpoint_subtree_size = endpoint.subtree_size;
 
         let mut predecessors = HashMap::new();
         predecessors.insert(start_id, None); // Doubles as a visited set
         let mut dead_ends = HashSet::new();
         while let Some(current_obj) = queue.pop_front() {
+            if let (Some(current_subtree_size), Some(endpoint_subtree_size)) =
+                (current_obj.subtree_size, endpoint_subtree_size)
+            {
+                // Heuristic: if the subtree size is smaller than the endpoint's subtree size, it can't possibly lead to the endpoint
+                if current_subtree_size < endpoint_subtree_size {
+                    dead_ends.insert(current_obj.id);
+                    continue; 
+                }
+            }
             if current_obj.id == end_id {
                 // Reconstruct path
                 let mut path = Vec::new();
