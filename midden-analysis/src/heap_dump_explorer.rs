@@ -9,8 +9,8 @@ use std::{
 
 use heed::{
     BytesDecode, BytesEncode, Database, DatabaseFlags, Env, EnvOpenOptions, Error as HeedError,
-    IntegerComparator, WithoutTls,
-    byteorder::NativeEndian,
+    WithoutTls,
+    byteorder::BigEndian,
     types::{Lazy, LazyDecode, SerdeJson, U64},
 };
 use pyo3::{prelude::*, types::PyString};
@@ -165,7 +165,7 @@ const ALL_TYPES: &str = "All Types";
 const PAGE_SIZE: usize = 1000; // Hardcode this for now
 
 type Id = u64;
-type IdDbType = U64<NativeEndian>;
+type IdDbType = U64<BigEndian>;
 
 trait SizeEstimator: Clone {
     fn empty() -> Self;
@@ -288,8 +288,8 @@ impl<'txn> BytesDecode<'txn> for Type {
 /// LMDB-backed explorer for heap dumps produced by the Python dumper.
 pub struct HeapDumpExplorer {
     env: Env<WithoutTls>,
-    primary_db: Database<IdDbType, SerdeJson<RawObjectRecord>, IntegerComparator>,
-    referrers_db: Database<IdDbType, IdDbType, IntegerComparator>,
+    primary_db: Database<IdDbType, SerdeJson<RawObjectRecord>>,
+    referrers_db: Database<IdDbType, IdDbType>,
     types_db: Database<Type, IdDbType>,
     types_size_index_db: Database<Type, SizeIndexEntry>,
     types_subtree_size_index_db: Database<Type, SizeIndexEntry>,
