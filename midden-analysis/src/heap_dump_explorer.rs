@@ -10,7 +10,7 @@ use std::{
 use heed::{
     BytesDecode, BytesEncode, Database, DatabaseFlags, Env, EnvOpenOptions, Error as HeedError,
     WithoutTls,
-    byteorder::BigEndian,
+    byteorder::{NativeEndian},
     types::{Lazy, LazyDecode, SerdeJson, U64},
 };
 use pyo3::{prelude::*, types::PyString};
@@ -165,7 +165,7 @@ const ALL_TYPES: &str = "All Types";
 const PAGE_SIZE: usize = 1000; // Hardcode this for now
 
 type Id = u64;
-type IdDbType = U64<BigEndian>;
+type IdDbType = U64<NativeEndian>;
 
 trait SizeEstimator: Clone {
     fn empty() -> Self;
@@ -469,18 +469,19 @@ impl HeapDumpExplorer {
                 .open(db_path)
         }?;
         let mut wtxn = env.write_txn()?;
+        #[allow(deprecated)]  // Deprecation warning says to use IntegerComparator, but it's too slow to put in hot loops
         let primary_db = env
             .database_options()
             .name(PRIMARY_DB)
+            .flags(DatabaseFlags::INTEGER_KEY)
             .types()
-            .key_comparator()
             .create(&mut wtxn)?;
+        #[allow(deprecated)]  // Deprecation warning says to use IntegerComparator, but it's too slow to put in hot loops
         let referrers_db = env
             .database_options()
             .name(REFERRERS_DB)
-            .flags(DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED)
+            .flags(DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED | DatabaseFlags::INTEGER_KEY)
             .types()
-            .key_comparator()
             .create(&mut wtxn)?;
         let types_db = env
             .database_options()
