@@ -1,3 +1,4 @@
+import datetime
 from contextlib import contextmanager
 import io
 import shutil
@@ -62,7 +63,7 @@ _DUMP_SCRIPT = (pathlib.Path(__file__).parent / "dump_heap.py").read_text()
 
 def _build_dump_heap_code(output_file):
     """Rewrite the injected script so it writes to the requested output path."""
-    return _DUMP_SCRIPT.replace(DEFAULT_DUMP_FILE, output_file).replace(
+    return _DUMP_SCRIPT.replace(f'"{DEFAULT_DUMP_FILE}"', repr(output_file)).replace(
         "# _dump_heap()", "_dump_heap()"
     )
 
@@ -110,8 +111,19 @@ def _dump_heap_from_pid_using_alternate_python_interpreter(
         subprocess.run(cmd, check=True)
 
 
+# import pudb.debugger  # noqa: F401
+# import pudb.source_view  # noqa: F401
+# import pygments  # noqa: F401
+# import pudb.theme  # noqa: F401
+# import urwid_readline  # noqa: F401
+# import urwid.display.escape  # noqa: F401
+
+# pudb.set_trace()
+
+
 def _should_use_alternate_python_interpreter(pid) -> str | None:
     """Return a better-matched Python executable for injection, if one is needed."""
+    # pudb.set_trace()  # Debug why alternate Python interpreter isn't being detected in CI
     try:
         exe, maps = _get_exe_and_maps(pid)
     except Exception as e:
@@ -121,7 +133,7 @@ def _should_use_alternate_python_interpreter(pid) -> str | None:
         )
         return None
     if not _can_this_python_inject(exe):
-        if exe.startswith("python"):
+        if os.path.basename(exe).startswith("python"):
             print(
                 f"Using {exe} as alternate Python interpreter based on process exe",
                 file=sys.stderr,
@@ -269,20 +281,32 @@ def _identify_pid_within_namespace(pid):
                 return int(line.split()[-1])
 
 
-def _dump_heap_from_pid(pid, output_file=DEFAULT_DUMP_FILE):
-    """Build the payload script and inject it into the target process."""
+def _dump_heap_from_pid(
+    pid, output_file=DEFAULT_DUMP_FILE, inactivity_timeout=datetime.timedelta(seconds=5)
+):
+    """Build the payload script and inject it into the target process.
+
+    Use remote_exec when available, else fall back to gdb."""
     code = _build_dump_heap_code(output_file)
-    _inject_into_process(pid, code)
 
-
-def _inject_into_process(pid, code):
-    """Inject Python code with remote_exec when available, else fall back to gdb."""
     script_file = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
     script_file.write(code)
     script_file.close()
     if remote_exec is not None:
         print("Using remote_exec to inject code", file=sys.stderr)
         remote_exec(pid, script_file.name)
+        last_progress = time.time()
+        while not os.path.exists(output_file):
+            partial_file = output_file + ".partial"
+            try:
+                last_progress = os.stat(partial_file).st_mtime
+            except FileNotFoundError:
+                pass
+            if time.time() - last_progress > inactivity_timeout.total_seconds():
+                raise PermissionError(
+                    "Timed out waiting for dump file to be created, injection may have failed"
+                )
+
     else:
         print("remote_exec not available, falling back to gdb method", file=sys.stderr)
         gdb_cmds = [

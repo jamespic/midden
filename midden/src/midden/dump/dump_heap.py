@@ -24,6 +24,8 @@ import sys
 # Max length for string representations of values
 _max_value_len = 1000
 
+DEFAULT_DUMP_FILE_NAME = "/tmp/dump.jsonl"
+
 
 def _dump_heap():
     """Write a JSONL heap snapshot for the current process to the fixed dump path."""
@@ -77,7 +79,7 @@ def _dump_heap():
     exclude_ids.add(id(_get_all_references))
 
     try:
-        with open("/tmp/dump.jsonl.partial", "w") as f:
+        with open(f"{DEFAULT_DUMP_FILE_NAME}.partial", "w") as f:
             exclude_ids.add(id(f))
 
             def dump_object(obj):
@@ -125,7 +127,7 @@ def _dump_heap():
             for obj in extra_objects:
                 dump_object(obj)
 
-        os.rename("/tmp/dump.jsonl.partial", "/tmp/dump.jsonl")
+        os.rename(f"{DEFAULT_DUMP_FILE_NAME}.partial", DEFAULT_DUMP_FILE_NAME)
 
     except Exception as e:
         sys.stderr.write(f"dump_heap error: {e}\n")
