@@ -161,7 +161,7 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) -> Result<(), V::ErrorT> 
                     ref child_scc_acc,
                 } => {
                     if let Some(child_node_acc) = child_node_acc {
-                        visitor.accumulate_node_values(&mut frame.node_acc, &child_node_acc);
+                        visitor.accumulate_node_values(&mut frame.node_acc, child_node_acc);
                     }
                     visitor._acc_scc_options(&mut frame.scc_acc, child_scc_acc.as_ref());
 
@@ -203,7 +203,7 @@ pub fn visit_sccs<V: GraphSCCVisitor>(visitor: &mut V) -> Result<(), V::ErrorT> 
                             visitor.emit_result(
                                 &member_id,
                                 &frame.node_acc,
-                                &frame.scc_acc.as_ref().unwrap(),
+                                frame.scc_acc.as_ref().unwrap(),
                             )?;
                         }
                         None
@@ -290,7 +290,7 @@ mod tests {
         }
 
         fn get_successors(&mut self, node: &Self::NodeT) -> Result<Vec<Self::NodeT>, Self::ErrorT> {
-            Ok(self.graph[&node].clone())
+            Ok(self.graph[node].clone())
         }
 
         fn accumulate_node_values(&self, v1: &mut Self::NodeAccT, v2: &Self::NodeAccT) {

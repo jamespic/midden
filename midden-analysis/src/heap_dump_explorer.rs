@@ -23,7 +23,6 @@ use crate::{
     summed_radix_tree::SummedRadixTree,
     tarjan::{self, GraphSCCVisitor},
 };
-use anyhow;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[pyclass(frozen, skip_from_py_object, get_all)]
@@ -117,10 +116,7 @@ impl BytesDecode<'_> for SizeIndexEntry {
         }
         let size = u64::MAX - u64::from_be_bytes(bytes[..8].try_into().unwrap());
         let obj_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
-        Ok(SizeIndexEntry {
-            size: size,
-            obj_id: obj_id,
-        })
+        Ok(SizeIndexEntry { size, obj_id })
     }
 }
 #[derive(Debug, PartialEq, Clone)]
@@ -206,7 +202,7 @@ impl SizeEstimator for Rc<SummedRadixTree> {
     }
 
     fn total(&self) -> u64 {
-        SummedRadixTree::total(self) as u64
+        SummedRadixTree::total(self)
     }
 
     fn include(&mut self, other: &Self) {
@@ -259,7 +255,7 @@ impl<'py> IntoPyObject<'py> for Type {
             Type::AllTypes() => ALL_TYPES.to_string(),
             Type::TypeName(name) => name,
         };
-        Ok(PyString::new(py, &s).into())
+        Ok(PyString::new(py, &s))
     }
 }
 
@@ -301,7 +297,7 @@ pub struct HeapDumpExplorer {
 }
 
 impl HeapDumpExplorer {
-    fn just_import_lines<'a>(&self, lines: &Bound<'_, PyAny>) -> anyhow::Result<()> {
+    fn just_import_lines(&self, lines: &Bound<'_, PyAny>) -> anyhow::Result<()> {
         let mut tx = self.env.write_txn()?;
         for item in lines.try_iter()? {
             let item = item?;
@@ -374,13 +370,13 @@ impl HeapDumpExplorer {
         let mut count = 0;
         for type_size_info in self.types_size_index_db.iter(&rtx)? {
             let (type_key, size_index_entry) = type_size_info?;
-            if let Some(ref last_key) = last_type_key {
-                if &type_key != last_key {
-                    self.type_summaries_db
-                        .put(tx, last_key, &TypeSummary { count, total_size })?;
-                    total_size = 0;
-                    count = 0;
-                }
+            if let Some(ref last_key) = last_type_key
+                && &type_key != last_key
+            {
+                self.type_summaries_db
+                    .put(tx, last_key, &TypeSummary { count, total_size })?;
+                total_size = 0;
+                count = 0;
             }
             last_type_key = Some(type_key);
             total_size += size_index_entry.size;
@@ -410,7 +406,7 @@ impl HeapDumpExplorer {
         let mut visitor = StronglyConnectedComponentsVisitor {
             explorer: self,
             ro_txn: &ro_txn,
-            ro_iter: ro_iter,
+            ro_iter,
             rw_txn: tx,
             known_skips,
             _estimator: PhantomData::<T>,
@@ -422,7 +418,7 @@ impl HeapDumpExplorer {
     fn get_summaries_for_ids(
         &self,
         tx: &heed::RoTxn,
-        ids: &Vec<Id>,
+        ids: &[Id],
     ) -> heed::Result<Vec<ObjectSummary>> {
         let summaries = collect_results(ids.iter().map(|id| self.get_summary(tx, *id)))?;
         Ok(summaries)
@@ -511,7 +507,7 @@ impl HeapDumpExplorer {
             .create(&mut wtxn)?;
         wtxn.commit()?;
 
-        return Ok(Self {
+        Ok(Self {
             env,
             primary_db,
             referrers_db,
@@ -519,7 +515,7 @@ impl HeapDumpExplorer {
             types_size_index_db,
             types_subtree_size_index_db,
             type_summaries_db,
-        });
+        })
     }
 
     /// Import JSONL heap records and build the requested secondary indexes.
@@ -580,7 +576,7 @@ impl HeapDumpExplorer {
     /// Return the number of result pages for one type.
     fn get_page_count_for_type(&self, typename: Type) -> anyhow::Result<usize> {
         let count = self.get_count_for_type(typename)?;
-        Ok((count + PAGE_SIZE - 1) / PAGE_SIZE)
+        Ok(count.div_ceil(PAGE_SIZE))
     }
 
     /// Return one page of objects for a type in id order.
@@ -651,9 +647,12 @@ impl HeapDumpExplorer {
                 (current_obj.subtree_size, endpoint_subtree_size)
             {
                 // Smaller subtrees cannot contain the endpoint, so skip them early.
+                // Whilst you might worry that this would be incorrect for approximate subtree sizes,
+                // the sketches we use are monotonic, so a smaller estimated subtree size does
+                // indeed guarantee a smaller true subtree size.
                 if current_subtree_size < endpoint_subtree_size {
                     dead_ends.insert(current_obj.id);
-                    continue; 
+                    continue;
                 }
             }
             if current_obj.id == end_id {
@@ -682,8 +681,8 @@ impl HeapDumpExplorer {
                     continue;
                 }
 
-                if !predecessors.contains_key(&ref_id) {
-                    predecessors.insert(ref_id, Some(current_obj.id));
+                if let std::collections::hash_map::Entry::Vacant(e) = predecessors.entry(ref_id) {
+                    e.insert(Some(current_obj.id));
                     queue.push_back(obj);
                 }
             }
@@ -722,10 +721,10 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         &mut self,
         mut already_visited: impl FnMut(&Self::NodeIdT) -> bool,
     ) -> Result<Option<Self::NodeT>, Self::ErrorT> {
-        while let Some(item) = self.ro_iter.next() {
+        for item in &mut self.ro_iter {
             let (node_id, record): (Self::NodeIdT, Lazy<SerdeJson<ObjectRecordNoValue>>) = item?;
             if !already_visited(&node_id) {
-                let record = record.decode().map_err(|e| HeedError::Decoding(e))?;
+                let record = record.decode().map_err(HeedError::Decoding)?;
                 return Ok(Some(record));
             }
         }
@@ -746,11 +745,11 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
             .primary_db
             .remap_data_type::<SerdeJson<ObjectRecordNoValue>>();
         let results = collect_results(node.references.iter().filter_map(|succ_id| {
-            if self.known_skips.contains(&*succ_id) {
+            if self.known_skips.contains(succ_id) {
                 return None;
             }
 
-            match remapped_db.get(&self.ro_txn, succ_id) {
+            match remapped_db.get(self.ro_txn, succ_id) {
                 Ok(Some(record)) => {
                     if should_skip_link_in_subtree_exploration(&record) {
                         self.known_skips.insert(*succ_id);
@@ -794,7 +793,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         let mut record = self
             .explorer
             .primary_db
-            .get(&self.rw_txn, &node_id)?
+            .get(self.rw_txn, node_id)?
             .ok_or_else(|| {
                 HeedError::Decoding(format!("Missing record for node ID {}", node_id).into())
             })?;
@@ -802,9 +801,9 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         record.subtree_size = Some(subtree_size);
         self.explorer
             .primary_db
-            .put(&mut self.rw_txn, &node_id, &record)?;
+            .put(self.rw_txn, node_id, &record)?;
         self.explorer.put_size_index_entry(
-            &mut self.rw_txn,
+            self.rw_txn,
             &Type::TypeName(record.r#type),
             &SizeIndexEntry {
                 size: subtree_size,

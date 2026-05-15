@@ -92,7 +92,7 @@ impl SummedRadixTree {
     }
 
     /// Union two trees by taking the elementwise maximum.
-    pub fn union<'a>(self: &Rc<Self>, other: &Rc<Self>) -> Rc<Self> {
+    pub fn union(self: &Rc<Self>, other: &Rc<Self>) -> Rc<Self> {
         match (self.as_ref(), other.as_ref()) {
             (Self::Empty, _) => other.clone(),
             (_, Self::Empty) => self.clone(),
@@ -247,7 +247,7 @@ impl SummedRadixTree {
     }
 
     pub fn _estimate_size_fudging_refcounts(self: &Rc<Self>) -> usize {
-        return (self._estimate_size() / Rc::strong_count(&self)) + size_of::<Rc<()>>();
+        (self._estimate_size() / Rc::strong_count(self)) + size_of::<Rc<()>>()
     }
 }
 
