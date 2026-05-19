@@ -128,7 +128,7 @@ jobs:
           # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           working-directory: midden-analysis
       - name: test
-        run: uv run nox -s test_analysis test_analysis_rust
+        run: uv run nox -s test_analysis-3.14 test_analysis_rust
       - name: test injection
         run: uv run nox -s test_injection
       - uses: actions/setup-python@v6
