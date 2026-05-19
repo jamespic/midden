@@ -9,6 +9,7 @@ dependencies = [
     "nox>=2026.4.10",
     "nox-uv>=0.8.0",
     "pytest>=9.0.3",
+    "uv>=0.11.15",
 ]
 
 [tool.uv.sources]
