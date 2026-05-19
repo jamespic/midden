@@ -7,8 +7,6 @@ import sys
 
 from pathlib import Path
 
-import docker
-
 from midden.dump.inject import dump_heap_from_pid
 
 if sys.platform == "linux":
@@ -56,6 +54,8 @@ INJECTABLE_PROGRAM = (Path(__file__).parent / "dummy_injectable_program.py").rea
 
 @pytest.fixture
 def injectable_namespaced_process(request: pytest.FixtureRequest) -> Generator[int]:
+    import docker
+
     print(
         "Connecting to Docker and starting namespaced injectable process...",
         file=sys.stderr,
