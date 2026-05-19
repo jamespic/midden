@@ -35,6 +35,15 @@ jobs:
           python-version: "3.10"
       - uses: astral-sh/setup-uv@v7
         if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: beta
+            override: true
+            components: rustfmt, clippy
+
+
       - name: Build midden wheels and all sdists
         if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         shell: bash
@@ -66,6 +75,7 @@ jobs:
           args: --release --out dist
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
+          working-directory: midden-analysis
       - name: Build free-threaded musl wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -73,6 +83,7 @@ jobs:
           args: --release --out dist -i python3.14t
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
+          working-directory: midden-analysis
       - name: check-and-test
         if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         run: uv run nox
@@ -103,6 +114,12 @@ jobs:
           python-version: "3.13"
           architecture: ${{ matrix.platform.python_arch }}
       - uses: astral-sh/setup-uv@v7
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: beta
+            override: true
+            components: rustfmt, clippy
       - name: Build midden-analysis wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -151,6 +168,12 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           working-directory: midden-analysis
       - uses: astral-sh/setup-uv@v7
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: beta
+            override: true
+            components: rustfmt, clippy
       - name: check-and-test
         run: uv run nox
       - uses: actions/setup-python@v6
