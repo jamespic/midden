@@ -36,6 +36,13 @@ if __name__ == "__main__":
                 f"Version mismatch in midden/pyproject.toml: {midden_version} != {tag}"
             )
             failed = True
+        
+        ui_deps = pyproject_data["project"]["optional-dependencies"]["ui"]
+        if f"midden-analysis=={tag}" not in ui_deps:
+            print(
+                f"Version mismatch in midden/pyproject.toml optional dependencies: midden-analysis=={tag} not found in {ui_deps}"
+            )
+            failed = True
 
     with open("midden-analysis/Cargo.toml", "rb") as f:
         cargo_data = load(f)
