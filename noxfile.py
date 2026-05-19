@@ -1,3 +1,4 @@
+import sys
 from nox import Session, options
 from nox_uv import session
 
@@ -13,7 +14,9 @@ options.sessions = [
 
 
 @session(
-    python=["3.10", "3.11", "3.12", "3.13", "3.14"],
+    python=["3.10", "3.11", "3.12", "3.13", "3.14"]
+    if sys.platform == "linux"
+    else ["3.14"],
     uv_packages=["midden"],
     uv_groups=["dev"],
 )
