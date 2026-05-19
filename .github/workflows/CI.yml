@@ -57,7 +57,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out ../dist
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
           working-directory: midden-analysis
       - name: Build free-threaded midden-analysis wheels
@@ -65,7 +65,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out ../dist -i python3.14t
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
           working-directory: midden-analysis
       - name: Build musl wheels
@@ -73,7 +73,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
           working-directory: midden-analysis
       - name: Build free-threaded musl wheels
@@ -81,7 +81,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i python3.14t
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
           working-directory: midden-analysis
       - name: check-and-test
@@ -122,7 +122,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out ../dist
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           working-directory: midden-analysis
       - name: test
         run: uv run nox test_analysis test_analysis_rust
@@ -137,7 +137,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out ../dist -i python3.14t
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           working-directory: midden-analysis
       - name: Upload wheels
         uses: actions/upload-artifact@v6
@@ -164,7 +164,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out ../dist
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           working-directory: midden-analysis
       - uses: astral-sh/setup-uv@v7
       - name: Install Rust
@@ -185,7 +185,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out ../dist -i python3.14t
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           working-directory: midden-analysis
       - name: Upload wheels
         uses: actions/upload-artifact@v6
