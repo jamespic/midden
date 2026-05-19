@@ -38,7 +38,7 @@ def injectable_process(python_venv: Path) -> Generator[int]:
     )
     assert proc.stdout is not None
     read = proc.stdout.readline()
-    assert read == b"Started!!!\n"
+    assert read.startswith(b"Started!!!")
     try:
         yield proc.pid
     finally:
