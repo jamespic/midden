@@ -27,9 +27,10 @@ requires = ["uv_build>=0.9.22,<0.10.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = [
-    "docker>=7.1.0",
-    "pytest>=9.0.3",
-    "ruff>=0.15.7",
-    "ty>=0.0.24",
+dev = ["docker>=7.1.0", "pytest>=9.0.3", "ruff>=0.15.7", "ty>=0.0.24"]
+
+[tool.pytest.ini_options]
+markers = [
+    "linux: tests that require Linux",
+    "min_python(python_ver): tests that require a minimum Python version",
 ]
