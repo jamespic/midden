@@ -464,7 +464,7 @@ impl HeapDumpExplorer {
         let env = unsafe {
             EnvOpenOptions::new()
                 .read_txn_without_tls()
-                .map_size(10 * 1024 * 1024 * 1024)
+                .map_size(64 * 1024 * 1024 * 1024)
                 .max_dbs(7)
                 .open(db_path)
         }?;
