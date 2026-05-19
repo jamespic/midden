@@ -13,9 +13,14 @@ import sys
 import subprocess
 
 try:
-    from sys import remote_exec
+    from sys import remote_exec  # ty: ignore[unresolved-import]
 except ImportError:
-    remote_exec = None  # type: ignore
+    remote_exec = None
+
+try:
+    from os import setns  # ty: ignore[unresolved-import]
+except ImportError:
+    setns = None
 
 try:
     import psutil
@@ -23,6 +28,14 @@ try:
     _psutil_available = True
 except ImportError:
     _psutil_available = False
+
+GIL_ENABLED = True
+try:
+    from sys import _is_gil_enabled  # ty: ignore[unresolved-import]
+
+    GIL_ENABLED = _is_gil_enabled()
+except ImportError:
+    pass
 
 DEFAULT_DUMP_FILE = "/tmp/dump.jsonl"
 
@@ -111,19 +124,8 @@ def _dump_heap_from_pid_using_alternate_python_interpreter(
         subprocess.run(cmd, check=True)
 
 
-# import pudb.debugger  # noqa: F401
-# import pudb.source_view  # noqa: F401
-# import pygments  # noqa: F401
-# import pudb.theme  # noqa: F401
-# import urwid_readline  # noqa: F401
-# import urwid.display.escape  # noqa: F401
-
-# pudb.set_trace()
-
-
 def _should_use_alternate_python_interpreter(pid) -> str | None:
     """Return a better-matched Python executable for injection, if one is needed."""
-    # pudb.set_trace()  # Debug why alternate Python interpreter isn't being detected in CI
     try:
         exe, maps = _get_exe_and_maps(pid)
     except Exception as e:
@@ -146,7 +148,7 @@ def _should_use_alternate_python_interpreter(pid) -> str | None:
                     r".*lib(python\d\.\d.*)\.so", m
                 ):  # Look for a python library in the maps
                     python_exe_wanted = match.group(1)
-                    if python_exe_wanted == _effective_executable_name():
+                    if python_exe_wanted == _this_effective_executable_name():
                         print(
                             f"Mapped library {m} suggests target process is running same Python version, so no alternate interpreter needed",
                             file=sys.stderr,
@@ -200,14 +202,34 @@ def _can_this_python_inject(exe):
     """Return whether the current interpreter likely matches the target runtime."""
     if exe == sys.executable:
         return True
-    basename = os.path.basename(exe)
-    if basename == _effective_executable_name():
+    if _get_effective_executable_name(exe) == _this_effective_executable_name():
         return True
 
+    return False
 
-def _effective_executable_name():
+
+def _get_effective_executable_name(exe):
+    """Return the versioned Python executable name for a given path, if it looks like Python."""
+    basename = os.path.basename(exe)
+    match = re.match(r"python\d\.\d.+t?", basename)
+    if match:
+        return match.group(0)
+    if os.path.islink(exe):
+        # If it's a symlink, check if the target looks like Python
+        target = os.readlink(exe)
+        return _get_effective_executable_name(target)
+    return None
+
+
+def _this_effective_executable_name():
     """Return the versioned Python executable name for the current runtime."""
-    return f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+    name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    if GIL_ENABLED:
+        return name
+    else:
+        # For GIL-less Python, the executable is suffixed with -gil0
+        return name + "t"
 
 
 def _dump_heap_from_pid_possibly_in_namespace(
@@ -254,9 +276,14 @@ def _dump_heap_from_pid_in_namespace(
 @contextmanager
 def _in_namespace(pid):
     """Fork into the target mount and PID namespaces for the duration of the block."""
+    if setns is None:
+        raise NotImplementedError(
+            "Namespace injection method is not available on this platform"
+        )
     inner_pid = _identify_pid_within_namespace(pid)
     if (forked_pid := os.fork()) == 0:
-        os.setns(os.pidfd_open(pid), os.CLONE_NEWNS | os.CLONE_NEWPID)
+        setns(os.open(f"/proc/{pid}/ns/pid", 0), 0)
+        setns(os.open(f"/proc/{pid}/ns/mnt", 0), 0)
         # Must fork again after setns to actually be in the new PID namespace
         if (inner_forked_pid := os.fork()) == 0:
             yield inner_pid

@@ -12,7 +12,7 @@ import docker
 from midden.dump.inject import dump_heap_from_pid
 
 if sys.platform == "linux":
-    INJECTABLE_PYTHON_VERSIONS = ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    INJECTABLE_PYTHON_VERSIONS = ["3.10", "3.11", "3.12", "3.13", "3.14", "3.14+gil"]
 else:
     # On non-Linux platforms, we need sys.remote_exec, which only supports Python 3.14+
     INJECTABLE_PYTHON_VERSIONS = ["3.14"]
@@ -22,7 +22,7 @@ else:
 def python_venv(tmp_path, request: pytest.FixtureRequest) -> Generator[Path]:
     """Create a temporary virtual environment for testing."""
     venv_dir = tmp_path / "venv"
-    subprocess.run(["uv", "venv", "-p", f"{request.param}+gil", venv_dir], check=True)
+    subprocess.run(["uv", "venv", "-p", f"{request.param}", venv_dir], check=True)
     return venv_dir / "bin" / "python"
 
 
@@ -52,59 +52,59 @@ def test_inject(injectable_process: int, tmp_path: Path):
 
 
 INJECTABLE_PROGRAM = (Path(__file__).parent / "dummy_injectable_program.py").read_text()
-if sys.platform == "linux":
 
-    @pytest.fixture
-    def injectable_namespaced_process(request: pytest.FixtureRequest) -> Generator[int]:
-        print(
-            "Connecting to Docker and starting namespaced injectable process...",
-            file=sys.stderr,
-        )
-        docker_client = docker.from_env()
-        print("Running container with injectable program...", file=sys.stderr)
-        container = docker_client.containers.run(
-            image="python:3.14",
-            command=["python", "-c", INJECTABLE_PROGRAM],
-            detach=True,
-            remove=True,
-        )
-        deadline = time.monotonic() + 5  # 5-second timeout
-        while time.monotonic() < deadline:
-            container.reload()
-            if (
-                container.status == "running"
-                and "Started!!!" in container.logs().decode()
-            ):
-                break
-            time.sleep(0.5)
-        else:
-            print(container.logs(), file=sys.stderr)
-            raise TimeoutError("Container did not start within 5 seconds")
-        try:
-            print("Started container", file=sys.stderr)
-            yield container.attrs["State"]["Pid"]
-        finally:
-            print("Stopping container...", file=sys.stderr)
-            container.stop()
 
-    def test_namespaced_inject(injectable_namespaced_process: int, tmp_path: Path):
-        """Test that we can inject into a namespaced process and get a heap dump."""
-        output_file = str(tmp_path / "dump.jsonl")
-        args = [
-            "sudo",
-            sys.executable,
-            "-m",
-            "midden.dump.inject",
-            str(injectable_namespaced_process),
-            "-o",
-            output_file,
-        ]
-        print(f"Running injection subprocess with args: {args}", file=sys.stderr)
-        subprocess.run(
-            args,
-            check=True,
-        )
-        assert_dump_is_as_expected(output_file)
+@pytest.fixture
+def injectable_namespaced_process(request: pytest.FixtureRequest) -> Generator[int]:
+    print(
+        "Connecting to Docker and starting namespaced injectable process...",
+        file=sys.stderr,
+    )
+    docker_client = docker.from_env()
+    print("Running container with injectable program...", file=sys.stderr)
+    container = docker_client.containers.run(
+        image="python:3.14",
+        command=["python", "-c", INJECTABLE_PROGRAM],
+        detach=True,
+        remove=True,
+    )
+    deadline = time.monotonic() + 5  # 5-second timeout
+    while time.monotonic() < deadline:
+        container.reload()
+        if container.status == "running" and "Started!!!" in container.logs().decode():
+            break
+        time.sleep(0.5)
+    else:
+        print(container.logs(), file=sys.stderr)
+        raise TimeoutError("Container did not start within 5 seconds")
+    try:
+        print("Started container", file=sys.stderr)
+        yield container.attrs["State"]["Pid"]
+    finally:
+        print("Stopping container...", file=sys.stderr)
+        container.stop()
+
+
+@pytest.mark.linux
+@pytest.mark.min_python((3, 12))
+def test_namespaced_inject(injectable_namespaced_process: int, tmp_path: Path):
+    """Test that we can inject into a namespaced process and get a heap dump."""
+    output_file = str(tmp_path / "dump.jsonl")
+    args = [
+        "sudo",
+        sys.executable,
+        "-m",
+        "midden.dump.inject",
+        str(injectable_namespaced_process),
+        "-o",
+        output_file,
+    ]
+    print(f"Running injection subprocess with args: {args}", file=sys.stderr)
+    subprocess.run(
+        args,
+        check=True,
+    )
+    assert_dump_is_as_expected(output_file)
 
 
 def assert_dump_is_as_expected(dump_file: str):

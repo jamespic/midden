@@ -11,9 +11,12 @@ crate-type = ["cdylib"]
 
 [profile.release]
 frame-pointers = "force-on" # Everyone deserves frame pointers
-debug = "line-tables-only"
 lto = "thin"
 strip = false
+
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
 
 [dependencies]
 float16 = "0.1.5"

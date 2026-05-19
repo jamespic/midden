@@ -10,7 +10,7 @@ use std::{
 use heed::{
     BytesDecode, BytesEncode, Database, DatabaseFlags, Env, EnvOpenOptions, Error as HeedError,
     WithoutTls,
-    byteorder::{NativeEndian},
+    byteorder::NativeEndian,
     types::{Lazy, LazyDecode, SerdeJson, U64},
 };
 use pyo3::{prelude::*, types::PyString};
@@ -469,14 +469,16 @@ impl HeapDumpExplorer {
                 .open(db_path)
         }?;
         let mut wtxn = env.write_txn()?;
-        #[allow(deprecated)]  // Deprecation warning says to use IntegerComparator, but it's too slow to put in hot loops
+        #[allow(deprecated)]
+        // Deprecation warning says to use IntegerComparator, but it's too slow to put in hot loops
         let primary_db = env
             .database_options()
             .name(PRIMARY_DB)
             .flags(DatabaseFlags::INTEGER_KEY)
             .types()
             .create(&mut wtxn)?;
-        #[allow(deprecated)]  // Deprecation warning says to use IntegerComparator, but it's too slow to put in hot loops
+        #[allow(deprecated)]
+        // Deprecation warning says to use IntegerComparator, but it's too slow to put in hot loops
         let referrers_db = env
             .database_options()
             .name(REFERRERS_DB)

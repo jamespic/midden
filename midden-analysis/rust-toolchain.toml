@@ -1,0 +1,4 @@
+[toolchain]
+# We want at least 1.96 to get frame pointers, but 1.96 won't be stable until the end of May 2026,
+# so we'll use the beta channel for now. We can switch to stable once 1.96 is released.
+channel = "beta"

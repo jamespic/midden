@@ -9,8 +9,6 @@ mod tarjan;
 mod midden_analysis {
     #[pymodule_export]
     use crate::heap_dump_explorer::{
-        EstimatorPrecision, HeapDumpExplorer, ObjectRecord,
-        ObjectSummary, TypeSummary,
+        EstimatorPrecision, HeapDumpExplorer, ObjectRecord, ObjectSummary, TypeSummary,
     };
-
 }
