@@ -21,7 +21,11 @@ def python_venv(tmp_path, request: pytest.FixtureRequest) -> Generator[Path]:
     """Create a temporary virtual environment for testing."""
     venv_dir = tmp_path / "venv"
     subprocess.run(["uv", "venv", "-p", f"{request.param}", venv_dir], check=True)
-    return venv_dir / "bin" / "python"
+    return (
+        venv_dir / "bin" / "python"
+        if sys.platform != "win32"
+        else venv_dir / "Scripts" / "python.exe"
+    )
 
 
 @pytest.fixture
