@@ -71,6 +71,6 @@ def lint_midden_analysis(session: Session) -> None:
     session.run("ty", "check")
 
 
-@session
+@session(python=["3.14"])
 def check_versions(session: Session) -> None:
     session.run("python", "check-versions.py")

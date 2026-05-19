@@ -2,7 +2,7 @@
 
 import subprocess
 from argparse import ArgumentParser
-from tomllib import load
+from tomllib import load  # ty: ignore[unresolved-import]
 
 if __name__ == "__main__":
     argparser = ArgumentParser(

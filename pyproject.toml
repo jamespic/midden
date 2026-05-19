@@ -2,7 +2,7 @@
 name = "midden-root"
 version = "0.1.0"
 # Use 3.11 for root project so we can use tomllib in helper scripts
-requires-python = ">=3.11"  
+requires-python = ">=3.10"  
 dependencies = [
     "midden",
     "midden-analysis",
