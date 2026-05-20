@@ -7,6 +7,10 @@ name = "midden-analysis"
 requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
+authors = [
+    { name = "James Pickering", email = "james.pickering@airelogic.com" },
+]
+description = "Analysis helpers for Midden, a heap analysis and visualization tool."
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
@@ -23,19 +27,3 @@ dev = [
     "ty>=0.0.34",
     "uv>=0.11.15",
 ]
-
-[tool.maturin.generate-ci.github]
-pytest = true
-trusted_publishing = true
-publishing_environment = "release"
-
-# We're going to use this CI config as a starting point to customise, so don't bother with 32-bit or esoteric platforms that need special cases.
-[tool.maturin.generate-ci.github.linux]
-targets = ["x86_64", "aarch64"]
-
-[tool.maturin.generate-ci.github.musllinux]
-targets = ["x86_64", "aarch64"]
-
-[tool.maturin.generate-ci.github.windows]
-
-[tool.maturin.generate-ci.github.macos]
