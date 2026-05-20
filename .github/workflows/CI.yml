@@ -208,6 +208,7 @@ jobs:
       # Used to generate artifact attestation
       attestations: write
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
       - name: Generate artifact attestation
         uses: actions/attest@v4
@@ -236,6 +237,7 @@ jobs:
       # Used to generate artifact attestation
       attestations: write
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
       - name: Generate artifact attestation
         uses: actions/attest@v4
@@ -264,6 +266,7 @@ jobs:
       # Used to generate artifact attestation
       attestations: write
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
       - name: Generate artifact attestation
         uses: actions/attest@v4
@@ -292,6 +295,7 @@ jobs:
       # Used to generate artifact attestation
       attestations: write
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
       - name: Generate artifact attestation
         uses: actions/attest@v4
