@@ -7,17 +7,20 @@ name = "midden-analysis"
 requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
-authors = [
-    { name = "James Pickering", email = "james.pickering@airelogic.com" },
-]
 description = "Analysis helpers for Midden, a heap analysis and visualization tool."
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
 dependencies = []
+maintainers = [
+    { name = "James Pickering", email = "james_pic@hotmail.com" } 
+]
+
+[project.urls]
+Repository = "https://github.com/jamespic/midden"
+Issues = "https://github.com/jamespic/midden/issues"
 
 [dependency-groups]
 dev = [

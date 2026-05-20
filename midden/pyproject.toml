@@ -3,12 +3,17 @@ name = "midden"
 version = "0.1.0"
 description = "A simple heap analysis and visualization tool."
 readme = "README.md"
-authors = [
-    { name = "James Pickering", email = "james.pickering@airelogic.com" },
-]
 requires-python = ">=3.10"
 dependencies = []
 license = "MIT"
+maintainers = [
+    { name = "James Pickering", email = "james_pic@hotmail.com" } 
+]
+
+
+[project.urls]
+Repository = "https://github.com/jamespic/midden"
+Issues = "https://github.com/jamespic/midden/issues"
 
 [project.optional-dependencies]
 ui = [
