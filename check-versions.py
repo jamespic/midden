@@ -3,6 +3,7 @@
 import subprocess
 from argparse import ArgumentParser
 from tomllib import load  # ty: ignore[unresolved-import]
+import sys
 
 if __name__ == "__main__":
     argparser = ArgumentParser(
@@ -12,12 +13,18 @@ if __name__ == "__main__":
     args = argparser.parse_args()
 
     if args.tag is None:
-        tag = subprocess.run(
-            ["git", "describe", "--tags", "--abrev=0"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        try:
+            tag = subprocess.run(
+                ["git", "describe", "--tags", "--abbrev=0"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except subprocess.CalledProcessError as e:
+            print(f"Error getting git tag: {e}")
+            print(e.stdout)
+            print(e.stderr, file=sys.stderr)
+            exit(1)
         if tag.startswith("release/"):
             tag = tag.removeprefix("release/")
         elif tag.startswith("test/"):
@@ -36,7 +43,7 @@ if __name__ == "__main__":
                 f"Version mismatch in midden/pyproject.toml: {midden_version} != {tag}"
             )
             failed = True
-        
+
         ui_deps = pyproject_data["project"]["optional-dependencies"]["ui"]
         if f"midden-analysis=={tag}" not in ui_deps:
             print(
