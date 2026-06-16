@@ -35,6 +35,8 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
+            toolchain: stable
+            override: true
             components: rustfmt, clippy
       - name: Install gdb
         run: sudo apt-get update && sudo apt-get install -y gdb
@@ -112,6 +114,8 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
+            toolchain: stable
+            override: true
             components: rustfmt, clippy
       - name: Build midden-analysis wheels
         uses: PyO3/maturin-action@v1
@@ -164,6 +168,8 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
+            toolchain: stable
+            override: true
             components: rustfmt, clippy
       - name: test
         run: uv run nox -s test_analysis test_analysis_rust
