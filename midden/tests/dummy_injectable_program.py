@@ -1,6 +1,6 @@
-from time import sleep
-import sys
 import signal
+import sys
+from time import sleep
 
 data = [
     "Test Data Item",

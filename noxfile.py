@@ -1,4 +1,5 @@
 import sys
+
 from nox import Session, options
 from nox_uv import session
 
@@ -37,7 +38,7 @@ def test_analysis(session: Session) -> None:
 
 @session
 def install_rust(session: Session) -> None:
-    session.run_install("rustup", "install", "beta", external=True)
+    session.run_install("rustup", "install", "stable", external=True)
 
 
 @session(requires=["install_rust"])

@@ -1,12 +1,11 @@
-import time
 import json
-from collections.abc import Generator
 import subprocess
-import pytest
 import sys
-
+import time
+from collections.abc import Generator
 from pathlib import Path
 
+import pytest
 from midden.dump.inject import dump_heap_from_pid
 
 if sys.platform == "linux":

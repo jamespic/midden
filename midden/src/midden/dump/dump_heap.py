@@ -3,84 +3,81 @@
 The output is a JSONL file where each line is a JSON object representing an object in the heap,
 with its id, type, referers, references, and optionally its value (for simple types)."""
 
-from types import (
-    ModuleType,
-    FunctionType,
-    BuiltinFunctionType,
-    MethodType,
-    WrapperDescriptorType,
-    MethodWrapperType,
-    MethodDescriptorType,
-    ClassMethodDescriptorType,
-    GetSetDescriptorType,
-    MemberDescriptorType,
-)
-
 import gc
 import json
 import os
 import sys
+from types import (
+    BuiltinFunctionType,
+    ClassMethodDescriptorType,
+    FunctionType,
+    GetSetDescriptorType,
+    MemberDescriptorType,
+    MethodDescriptorType,
+    MethodType,
+    MethodWrapperType,
+    ModuleType,
+    WrapperDescriptorType,
+)
 
 # Max length for string representations of values
 _max_value_len = 1000
 
-DEFAULT_DUMP_FILE_NAME = "/tmp/dump.jsonl"
-
-
-def _dump_heap():
+def dump_heap(dump_file = "heap_dump.jsonl"):
     """Write a JSONL heap snapshot for the current process to the fixed dump path."""
     # Get all objects tracked by gc
-    all_objects = gc.get_objects()
-    print(f"Found {len(all_objects)} objects from gc.get_objects()", file=sys.stderr)
-    extra_objects = []
-    object_ids_tracked = set(id(obj) for obj in all_objects)
-
-    # Collect ids of our own data structures so we can exclude them
-    exclude_ids = set(
-        [id(all_objects), id(extra_objects), id(object_ids_tracked), id(_dump_heap)]
-    )
-    exclude_ids.add(
-        id(exclude_ids)
-    )  # Don't forget to exclude the set of excluded ids itself!
-
-    def _maybe_add_ref(ref_obj, refs):
-        ref_id = id(ref_obj)
-        if ref_id not in exclude_ids:
-            refs.append(ref_id)
-            if ref_id not in object_ids_tracked:
-                extra_objects.append(ref_obj)
-                object_ids_tracked.add(ref_id)
-
-    exclude_ids.add(id(_maybe_add_ref))
-
-    def _get_all_references(obj):
-        """Get references from an object, including non-gc-tracked immutables."""
-        refs = []
-        exclude_ids.add(id(refs))
-
-        obj_type = type(obj)
-        if obj_type is dict:
-            for k, v in obj.items():
-                _maybe_add_ref(k, refs)
-                _maybe_add_ref(v, refs)
-        elif obj_type in (list, tuple, frozenset, set):
-            for item in obj:
-                _maybe_add_ref(item, refs)
-        else:
-            # Fall back to gc.get_referents for other types,
-            # which catches __dict__, slots, etc.
-            gc_refs = gc.get_referents(obj)
-            exclude_ids.add(id(gc_refs))
-            for r in gc_refs:
-                _maybe_add_ref(r, refs)
-
-        return refs
-
-    exclude_ids.add(id(_get_all_references))
-
     try:
-        with open(f"{DEFAULT_DUMP_FILE_NAME}.partial", "w") as f:
+        exclude_ids = set()  # Keep track of ids of objects we want to exclude from the dump
+        with open(f"{dump_file}.partial", "w") as f:
             exclude_ids.add(id(f))
+            exclude_ids.add(
+                id(exclude_ids)
+            )  # Don't forget to exclude the set of excluded ids itself!
+
+            all_objects = gc.get_objects()
+            print(f"Found {len(all_objects)} objects from gc.get_objects()", file=sys.stderr)
+            extra_objects = []
+            object_ids_tracked = set(id(obj) for obj in all_objects)
+
+            # Collect ids of our own data structures so we can exclude them
+            exclude_ids.update(
+                [id(all_objects), id(extra_objects), id(object_ids_tracked), id(dump_heap)]
+            )
+
+            def _maybe_add_ref(ref_obj, refs):
+                ref_id = id(ref_obj)
+                if ref_id not in exclude_ids:
+                    refs.append(ref_id)
+                    if ref_id not in object_ids_tracked:
+                        extra_objects.append(ref_obj)
+                        object_ids_tracked.add(ref_id)
+
+            exclude_ids.add(id(_maybe_add_ref))
+
+            def _get_all_references(obj):
+                """Get references from an object, including non-gc-tracked immutables."""
+                refs = []
+                exclude_ids.add(id(refs))
+
+                obj_type = type(obj)
+                if obj_type is dict:
+                    for k, v in obj.items():
+                        _maybe_add_ref(k, refs)
+                        _maybe_add_ref(v, refs)
+                elif obj_type in (list, tuple, frozenset, set):
+                    for item in obj:
+                        _maybe_add_ref(item, refs)
+                else:
+                    # Fall back to gc.get_referents for other types,
+                    # which catches __dict__, slots, etc.
+                    gc_refs = gc.get_referents(obj)
+                    exclude_ids.add(id(gc_refs))
+                    for r in gc_refs:
+                        _maybe_add_ref(r, refs)
+
+                return refs
+
+            exclude_ids.add(id(_get_all_references))
 
             def dump_object(obj):
                 """Serialize one object unless it belongs to the dumper's bookkeeping."""
@@ -127,7 +124,7 @@ def _dump_heap():
             for obj in extra_objects:
                 dump_object(obj)
 
-        os.rename(f"{DEFAULT_DUMP_FILE_NAME}.partial", DEFAULT_DUMP_FILE_NAME)
+        os.rename(f"{dump_file}.partial", dump_file)
 
     except Exception as e:
         sys.stderr.write(f"dump_heap error: {e}\n")
@@ -207,4 +204,3 @@ _value_extractors = {
 }
 
 
-# _dump_heap()  # Replaced by the injector so the dump only runs inside the target process.

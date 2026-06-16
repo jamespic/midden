@@ -1,16 +1,20 @@
+from __future__ import annotations
+
+import argparse
 import datetime
-from contextlib import contextmanager
 import io
-import shutil
-import re
-import tarfile
-import time
-import tempfile
-from subprocess import Popen, PIPE
 import os
 import pathlib
-import sys
+import re
+import shutil
 import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from contextlib import contextmanager
+from subprocess import PIPE, Popen
+from typing import Literal
 
 try:
     from sys import remote_exec  # ty: ignore[unresolved-import]
@@ -57,18 +61,73 @@ _TARBALL = _build_tarball_of_dumping_code()
 
 
 def dump_heap_from_pid(
-    pid,
+    pid: PidType,
     output_file=DEFAULT_DUMP_FILE,
     can_use_namespace_injection=True,
     can_use_alternate_python_interpreter=True,
 ):
     """Dump the heap of a running Python process given its PID."""
-    _dump_heap_from_pid_possibly_in_namespace(
-        pid,
-        output_file,
-        can_use_namespace_injection,
-        can_use_alternate_python_interpreter,
-    )
+    if pid == "all":
+        dump_all_python_processes(output_file)
+    else:
+        _dump_heap_from_pid_possibly_in_namespace(
+            pid,
+            output_file,
+            can_use_namespace_injection,
+            can_use_alternate_python_interpreter,
+        )
+
+
+def dump_all_python_processes(output_file=DEFAULT_DUMP_FILE):
+    """Dump the heap of all running Python processes."""
+    output_path = pathlib.Path(output_file)
+    for pid in _list_all_python_processes():
+        output_dir = output_path.parent
+        output_file_basename = f"{output_path.stem}_{pid}{output_path.suffix}"
+        pid_specific_output_file = output_dir / output_file_basename
+        print(
+            f"Dumping heap of process {pid} to {pid_specific_output_file}",
+            file=sys.stderr,
+        )
+        try:
+            dump_heap_from_pid(pid, str(pid_specific_output_file))
+        except Exception as e:
+            print(f"Failed to dump heap of process {pid}: {e}", file=sys.stderr)
+
+
+def _list_all_python_processes() -> list[int]:
+    """List all running Python processes."""
+    if _psutil_available:
+        return _list_all_python_processes_psutil()
+    else:
+        return _list_all_python_processes_procfs()
+
+
+def _list_all_python_processes_psutil() -> list[int]:
+    """List all running Python processes using psutil."""
+    python_pids = []
+    for proc in psutil.process_iter(["pid", "exe"]):
+        try:
+            exe = proc.exe()
+            if exe and pathlib.Path(exe).name.startswith("python"):
+                python_pids.append(proc.info["pid"])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return python_pids
+
+
+def _list_all_python_processes_procfs() -> list[int]:
+    """List all running Python processes using /proc filesystem (Linux only)."""
+    python_pids = []
+    for pid in os.listdir("/proc"):
+        if pid.isdigit():
+            try:
+                exe = os.readlink(f"/proc/{pid}/exe")
+                if pathlib.Path(exe).name.startswith("python"):
+                    python_pids.append(int(pid))
+            except (FileNotFoundError, PermissionError):
+                continue
+    return python_pids
 
 
 _DUMP_SCRIPT = (pathlib.Path(__file__).parent / "dump_heap.py").read_text()
@@ -76,9 +135,7 @@ _DUMP_SCRIPT = (pathlib.Path(__file__).parent / "dump_heap.py").read_text()
 
 def _build_dump_heap_code(output_file):
     """Rewrite the injected script so it writes to the requested output path."""
-    return _DUMP_SCRIPT.replace(f'"{DEFAULT_DUMP_FILE}"', repr(output_file)).replace(
-        "# _dump_heap()", "_dump_heap()"
-    )
+    return _DUMP_SCRIPT + f"\ndump_heap({output_file!r})\n"
 
 
 def _dump_heap_from_pid_possibly_using_an_alternate_python_interpreter(
@@ -322,17 +379,18 @@ def _dump_heap_from_pid(
     if remote_exec is not None:
         print("Using remote_exec to inject code", file=sys.stderr)
         remote_exec(pid, script_file.name)
-        last_progress = time.time()
+        timeout_time = time.monotonic() + inactivity_timeout.total_seconds()
+        partial_file = output_file + ".partial"
         while not os.path.exists(output_file):
-            partial_file = output_file + ".partial"
-            try:
-                last_progress = os.stat(partial_file).st_mtime
-            except FileNotFoundError:
-                pass
-            if time.time() - last_progress > inactivity_timeout.total_seconds():
+            if (
+                not os.path.exists(partial_file)
+                and not os.path.exists(output_file)
+                and time.monotonic() > timeout_time
+            ):
                 raise PermissionError(
                     "Timed out waiting for dump file to be created, injection may have failed"
                 )
+            time.sleep(0.1)
 
     else:
         print("remote_exec not available, falling back to gdb method", file=sys.stderr)
@@ -372,14 +430,32 @@ def _should_use_namespace(pid):
         return False
 
 
+PidType = int | Literal["all"]
+
+
+def pid_type(value: str) -> PidType:
+    """Custom argparse type for PID argument."""
+    if value == "all":
+        return "all"
+    try:
+        pid = int(value)
+        if pid <= 0:
+            raise ValueError
+        return pid
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid PID: {value}")
+
+
 def main():
     """CLI entry point for dumping a live Python process by PID."""
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Dump the heap of a running Python process."
     )
-    parser.add_argument("pid", type=int, help="PID of the target Python process")
+    parser.add_argument(
+        "pid",
+        type=pid_type,
+        help="PID of the target Python process, or 'all' to dump all Python processes.",
+    )
     parser.add_argument(
         "--output-file",
         "-o",
@@ -399,6 +475,7 @@ def main():
         help="Don't attempt to use an alternate Python interpreter for injection, even if the target process is running a different Python version.",
     )
     args = parser.parse_args()
+
     dump_heap_from_pid(
         args.pid,
         args.output_file,

@@ -1,18 +1,15 @@
 """A simple Flask GUI, with templated HTML with very basic styling, that lets the user explore a heap dump created by dump_heap.py."""
-import webbrowser
-
-import shutil
-
 import argparse
-
-from werkzeug.exceptions import NotFound
-from ntpath import basename
 import os
 import pathlib
+import shutil
+import webbrowser
+from ntpath import basename
 
 from cheroot.wsgi import Server as WSGIServer
-from flask import Flask, request, redirect, url_for, render_template, session
-from midden_analysis import HeapDumpExplorer, TypeSummary, EstimatorPrecision
+from flask import Flask, redirect, render_template, request, session, url_for
+from midden_analysis import EstimatorPrecision, HeapDumpExplorer, TypeSummary
+from werkzeug.exceptions import NotFound
 
 DUMPS_DIR = os.getenv("DUMPS_DIR", "/tmp/dumps")
 

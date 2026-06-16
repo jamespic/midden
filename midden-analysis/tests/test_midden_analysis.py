@@ -1,8 +1,8 @@
-from pathlib import Path
-import pytest
 import json
+from pathlib import Path
 
-from midden_analysis import HeapDumpExplorer, EstimatorPrecision
+import pytest
+from midden_analysis import EstimatorPrecision, HeapDumpExplorer
 
 TEST_DATA = [
     json.dumps(x).encode("utf-8")

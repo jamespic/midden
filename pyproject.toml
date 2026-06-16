@@ -2,7 +2,7 @@
 name = "midden-root"
 version = "0.1.0"
 # Use 3.11 for root project so we can use tomllib in helper scripts
-requires-python = ">=3.10"  
+requires-python = ">=3.10"
 dependencies = [
     "midden",
     "midden-analysis",
@@ -24,3 +24,6 @@ name = "testpypi"
 url = "https://test.pypi.org/simple/"
 publish-url = "https://test.pypi.org/legacy/"
 explicit = true
+
+[tool.ruff]
+select = ["F", "E4", "E7", "E9", "I"]

@@ -1,5 +1,6 @@
-import pytest
 import sys
+
+import pytest
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
