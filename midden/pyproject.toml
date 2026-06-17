@@ -6,9 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
 license = "MIT"
-maintainers = [
-    { name = "James Pickering", email = "james_pic@hotmail.com" } 
-]
+maintainers = [{ name = "James Pickering", email = "james_pic@hotmail.com" }]
 
 
 [project.urls]
@@ -32,7 +30,7 @@ requires = ["uv_build>=0.9.22,<0.10.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["docker>=7.1.0", "pytest>=9.0.3", "ruff>=0.15.7", "ty>=0.0.24"]
+dev = ["docker>=7.1.0", "pytest", "ruff", "ty", "uv"]
 
 [tool.pytest.ini_options]
 markers = [

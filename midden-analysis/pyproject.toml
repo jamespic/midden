@@ -14,19 +14,11 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = []
-maintainers = [
-    { name = "James Pickering", email = "james_pic@hotmail.com" } 
-]
+maintainers = [{ name = "James Pickering", email = "james_pic@hotmail.com" }]
 
 [project.urls]
 Repository = "https://github.com/jamespic/midden"
 Issues = "https://github.com/jamespic/midden/issues"
 
 [dependency-groups]
-dev = [
-    "maturin-import-hook>=0.3.0",
-    "pytest>=8.3.5",
-    "ruff>=0.15.12",
-    "ty>=0.0.34",
-    "uv>=0.11.15",
-]
+dev = ["maturin-import-hook>=0.3.0", "pytest", "ruff", "ty", "uv"]
