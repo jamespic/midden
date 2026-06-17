@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime
 import io
 import os
@@ -60,6 +61,10 @@ def _build_tarball_of_dumping_code():
 _TARBALL = _build_tarball_of_dumping_code()
 
 
+class PlatformNotSupportedError(Exception):
+    """Raised when the current platform does not support the injection method being attempted."""
+
+
 def dump_heap_from_pid(
     pid: PidType,
     output_file=DEFAULT_DUMP_FILE,
@@ -99,8 +104,12 @@ def _list_all_python_processes() -> list[int]:
     """List all running Python processes."""
     if _psutil_available:
         return _list_all_python_processes_psutil()
-    else:
+    elif sys.platform == "linux":
         return _list_all_python_processes_procfs()
+    else:
+        raise PlatformNotSupportedError(
+            "Listing Python processes is not supported on this platform."
+        )
 
 
 def _list_all_python_processes_psutil() -> list[int]:
@@ -246,23 +255,21 @@ def _get_exe_and_maps(pid):
                     if len(parts) >= 6:
                         path = parts[-1]
                         maps.append(path)
-        except Exception:
+        except Exception:  # noqa: S110 # Maps are a nice-to-have, but not critical, so ignore errors
             pass
         return exe, maps
     else:
-        raise Exception(
+        raise PlatformNotSupportedError(
             "Can't determine process executable on this platform without psutil"
         )
 
 
 def _can_this_python_inject(exe):
     """Return whether the current interpreter likely matches the target runtime."""
-    if exe == sys.executable:
-        return True
-    if _get_effective_executable_name(exe) == _this_effective_executable_name():
-        return True
-
-    return False
+    return (
+        exe == sys.executable
+        or _get_effective_executable_name(exe) == _this_effective_executable_name()
+    )
 
 
 def _get_effective_executable_name(exe):
@@ -371,50 +378,121 @@ def _dump_heap_from_pid(
     """Build the payload script and inject it into the target process.
 
     Use remote_exec when available, else fall back to gdb."""
+    _check_and_warn_about_potential_privileges_issues()
     code = _build_dump_heap_code(output_file)
 
-    script_file = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
-    script_file.write(code)
-    script_file.close()
-    if remote_exec is not None:
-        print("Using remote_exec to inject code", file=sys.stderr)
-        remote_exec(pid, script_file.name)
-        timeout_time = time.monotonic() + inactivity_timeout.total_seconds()
-        partial_file = output_file + ".partial"
-        while not os.path.exists(output_file):
-            if (
-                not os.path.exists(partial_file)
-                and not os.path.exists(output_file)
-                and time.monotonic() > timeout_time
-            ):
-                raise PermissionError(
-                    "Timed out waiting for dump file to be created, injection may have failed"
-                )
-            time.sleep(0.1)
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w") as script_file:
+        script_file.write(code)
+        script_file.flush()
 
-    else:
-        print("remote_exec not available, falling back to gdb method", file=sys.stderr)
-        gdb_cmds = [
-            "(char *) PyGILState_Ensure()",
-            '(void) PyRun_SimpleString("'
-            rf'exec(open(\"{script_file.name}\").read())")',
-            "(void) PyGILState_Release($1)",
-        ]
-        p = Popen(
-            [
-                "gdb",
-                "-p",
-                str(pid),
-                "--batch",
-                *(f"--eval-command=call {cmd}" for cmd in gdb_cmds),
-            ],
-            stdout=PIPE,
-            stderr=PIPE,
-            text=True,
-        )
-        out, err = p.communicate()
-        print(out, file=sys.stderr)
-        print(err, file=sys.stderr)
+        if remote_exec is not None:
+            _inject_using_remote_exec(
+                pid, script_file.name, output_file, inactivity_timeout
+            )
+
+        elif _gdb_available():
+            print(
+                "remote_exec not available, falling back to gdb method", file=sys.stderr
+            )
+            _inject_using_gdb(pid, script_file.name)
+        else:
+            raise PlatformNotSupportedError(
+                "No available method to inject code into the target process. On Linux, you may be able to install gdb and try again."
+            )
+
+
+def _check_and_warn_about_potential_privileges_issues():
+    """Check if the current user has sufficient privileges to inject into the target process."""
+    if sys.platform == "linux":
+        try:
+            yama_ptrace_scope_path = "/proc/sys/kernel/yama/ptrace_scope"
+            if os.path.exists(yama_ptrace_scope_path):
+                with open(yama_ptrace_scope_path) as f:
+                    yama_ptrace_scope = f.read().strip()
+                if yama_ptrace_scope != "0":
+                    print(
+                        f"Warning: Yama ptrace_scope is set to {yama_ptrace_scope}. If you experience injection problems, try setting this to 0.",
+                        file=sys.stderr,
+                    )
+        except Exception:  # noqa: S110 # Ignore any errors while checking ptrace_scope
+            pass
+
+    try:
+        if os.geteuid() != 0:
+            print(
+                "Warning: You are not running as root. If you experience injection problems, try running as root.",
+                file=sys.stderr,
+            )
+    except Exception:  # noqa: S110 # This will probably fail on Windows, so ignore any errors while checking privileges
+        pass
+
+    if sys.platform == "win32":
+        try:
+            if not ctypes.windll.shell32.IsUserAnAdmin():
+                print(
+                    "Warning: You are not running as Administrator. If you experience injection problems, try running as Administrator.",
+                    file=sys.stderr,
+                )
+        except Exception:  # noqa: S110 # Ignore any errors while checking for admin privileges
+            pass
+
+
+def _inject_using_remote_exec(
+    pid: int,
+    script_file_name: str,
+    output_file: str,
+    inactivity_timeout: datetime.timedelta,
+):
+    """Inject the script into the target process using remote_exec."""
+    assert remote_exec is not None, "remote_exec is not available on this platform"
+    print("Using remote_exec to inject code", file=sys.stderr)
+    remote_exec(pid, script_file_name)
+    timeout_time = time.monotonic() + inactivity_timeout.total_seconds()
+    partial_file = output_file + ".partial"
+    while not os.path.exists(output_file):
+        if (
+            not os.path.exists(partial_file)
+            and not os.path.exists(output_file)
+            and time.monotonic() > timeout_time
+        ):
+            raise PermissionError(
+                "Timed out waiting for dump file to be created, injection may have failed"
+            )
+        time.sleep(0.1)
+
+
+def _gdb_available() -> bool:
+    """Check if gdb is available on the system."""
+    try:
+        subprocess.run(["gdb", "--version"], check=True, capture_output=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def _inject_using_gdb(pid: int, script_file_name: str):
+    """Inject the script into the target process using gdb."""
+    gdb_cmds = [
+        "(char *) PyGILState_Ensure()",
+        '(void) PyRun_SimpleString("'
+        rf'exec(open(\"{script_file_name}\").read())")',
+        "(void) PyGILState_Release($1)",
+    ]
+    p = Popen(
+        [
+            "gdb",
+            "-p",
+            str(pid),
+            "--batch",
+            *(f"--eval-command=call {cmd}" for cmd in gdb_cmds),
+        ],
+        stdout=PIPE,
+        stderr=PIPE,
+        text=True,
+    )
+    out, err = p.communicate()
+    print(out, file=sys.stderr)
+    print(err, file=sys.stderr)
 
 
 def _should_use_namespace(pid):

@@ -25,7 +25,7 @@ if __name__ == "__main__":
             print(f"Error getting git tag: {e}")
             print(e.stdout)
             print(e.stderr, file=sys.stderr)
-            exit(1)
+            sys.exit(1)
         if tag.startswith("release/"):
             tag = tag.removeprefix("release/")
         elif tag.startswith("test/"):
@@ -62,6 +62,6 @@ if __name__ == "__main__":
             failed = True
 
     if failed:
-        exit(1)
+        sys.exit(1)
     else:
         print("Versions match git tag")

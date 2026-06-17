@@ -25,5 +25,8 @@ url = "https://test.pypi.org/simple/"
 publish-url = "https://test.pypi.org/legacy/"
 explicit = true
 
-[tool.ruff]
-select = ["F", "E4", "E7", "E9", "I"]
+[tool.ruff.lint]
+preview = true
+ignore = [
+    "BLE001", # No blind except is too heavy handed
+]

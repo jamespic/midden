@@ -10,7 +10,6 @@ name = "midden_analysis"
 crate-type = ["cdylib"]
 
 [profile.release]
-frame-pointers = "force-on" # Everyone deserves frame pointers
 lto = "thin"
 strip = false
 

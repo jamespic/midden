@@ -37,7 +37,7 @@ def dump_heap(dump_file = "heap_dump.jsonl"):
             all_objects = gc.get_objects()
             print(f"Found {len(all_objects)} objects from gc.get_objects()", file=sys.stderr)
             extra_objects = []
-            object_ids_tracked = set(id(obj) for obj in all_objects)
+            object_ids_tracked = {id(obj) for obj in all_objects}
 
             # Collect ids of our own data structures so we can exclude them
             exclude_ids.update(
