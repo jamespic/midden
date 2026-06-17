@@ -1,4 +1,5 @@
 """A simple Flask GUI, with templated HTML with very basic styling, that lets the user explore a heap dump created by dump_heap.py."""
+
 import argparse
 import os
 import pathlib
@@ -190,14 +191,13 @@ def create_app():
 def main():
     """Run the local Midden web server."""
     arg_parser = argparse.ArgumentParser(description="Run the Midden web server")
+    arg_parser.add_argument("--host", default="127.0.0.1")
+    arg_parser.add_argument("--port", default=5000, type=int)
     arg_parser.add_argument(
-        "--host", default="127.0.0.1"
-    )
-    arg_parser.add_argument(
-        "--port", default=5000, type=int
-    )
-    arg_parser.add_argument(
-        "--no-start-web-browser", action="store_false", dest="start_web_browser", help="Don't automatically open the web browser"
+        "--no-start-web-browser",
+        action="store_false",
+        dest="start_web_browser",
+        help="Don't automatically open the web browser",
     )
     args = arg_parser.parse_args()
     app = create_app()

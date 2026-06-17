@@ -65,14 +65,35 @@ def fix_rust(session: Session) -> None:
 def lint_midden(session: Session) -> None:
     session.cd("midden")
     session.run("ruff", "check")
+    session.run("ruff", "format", "--check")
     session.run("ty", "check")
+
+
+@session(uv_packages=["midden"], uv_all_groups=True, uv_all_extras=True)
+def fix_midden(session: Session) -> None:
+    session.cd("midden")
+    session.run("ruff", "check", "--fix")
+    session.run("ruff", "format")
 
 
 @session(uv_packages=["midden-analysis"], uv_all_groups=True, uv_all_extras=True)
 def lint_midden_analysis(session: Session) -> None:
     session.cd("midden-analysis")
     session.run("ruff", "check")
+    session.run("ruff", "format", "--check")
     session.run("ty", "check")
+
+
+@session(uv_packages=["midden-analysis"], uv_all_groups=True, uv_all_extras=True)
+def fix_midden_analysis(session: Session) -> None:
+    session.cd("midden-analysis")
+    session.run("ruff", "check", "--fix")
+    session.run("ruff", "format")
+
+
+@session(requires=["fix_midden", "fix_midden_analysis", "fix_rust"])
+def fix_all(session: Session) -> None:
+    session.log("All fixes applied.")
 
 
 @session(python=["3.14"])

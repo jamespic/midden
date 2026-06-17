@@ -23,11 +23,14 @@ from types import (
 # Max length for string representations of values
 _max_value_len = 1000
 
-def dump_heap(dump_file = "heap_dump.jsonl"):
+
+def dump_heap(dump_file="heap_dump.jsonl"):
     """Write a JSONL heap snapshot for the current process to the fixed dump path."""
     # Get all objects tracked by gc
     try:
-        exclude_ids = set()  # Keep track of ids of objects we want to exclude from the dump
+        exclude_ids = (
+            set()
+        )  # Keep track of ids of objects we want to exclude from the dump
         with open(f"{dump_file}.partial", "w") as f:
             exclude_ids.add(id(f))
             exclude_ids.add(
@@ -35,13 +38,21 @@ def dump_heap(dump_file = "heap_dump.jsonl"):
             )  # Don't forget to exclude the set of excluded ids itself!
 
             all_objects = gc.get_objects()
-            print(f"Found {len(all_objects)} objects from gc.get_objects()", file=sys.stderr)
+            print(
+                f"Found {len(all_objects)} objects from gc.get_objects()",
+                file=sys.stderr,
+            )
             extra_objects = []
             object_ids_tracked = {id(obj) for obj in all_objects}
 
             # Collect ids of our own data structures so we can exclude them
             exclude_ids.update(
-                [id(all_objects), id(extra_objects), id(object_ids_tracked), id(dump_heap)]
+                [
+                    id(all_objects),
+                    id(extra_objects),
+                    id(object_ids_tracked),
+                    id(dump_heap),
+                ]
             )
 
             def _maybe_add_ref(ref_obj, refs):
@@ -202,5 +213,3 @@ _value_extractors = {
     MemberDescriptorType: _name_extractor,
     type: _name_extractor,
 }
-
-

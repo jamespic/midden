@@ -9,14 +9,6 @@ rust-version = "1.96"
 name = "midden_analysis"
 crate-type = ["cdylib"]
 
-[profile.release]
-lto = "thin"
-strip = false
-
-[profile.profiling]
-inherits = "release"
-debug = "line-tables-only"
-
 [dependencies]
 float16 = "0.1.5"
 heed = "0.22.1"
