@@ -13,13 +13,11 @@ import sys
 import tarfile
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from http.client import HTTPSConnection
 from subprocess import PIPE, Popen
 from typing import Literal
-from http.client import HTTPSConnection
-from contextlib import ExitStack
 from urllib.parse import urlparse
-
 
 try:
     from sys import remote_exec  # ty: ignore[unresolved-import]
@@ -556,7 +554,9 @@ def _upload(url, file_path):
     with ExitStack() as stack:
         stack.callback(conn.close)
         file = stack.enter_context(open(file_path, "rb"))
-        content_length = file.seek(0, os.SEEK_END)  # Move to the end of the file to get its size
+        content_length = file.seek(
+            0, os.SEEK_END
+        )  # Move to the end of the file to get its size
         file.seek(0)  # Move back to the beginning of the file
         conn.request(
             "PUT",
@@ -610,7 +610,7 @@ def main():
         help="If provided, upload the dump file to this URL after dumping. The URL should be a presigned S3 PUT URL or any other HTTP PUT endpoint.",
     )
     args = parser.parse_args()
-    
+
     if args.output_file is None:
         if args.pid == "all":
             args.output_file = DEFAULT_DUMP_ARCHIVE_FILE

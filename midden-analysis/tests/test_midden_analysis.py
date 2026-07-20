@@ -70,3 +70,8 @@ def test_heap_dump_explorer(
     assert len(object_by_size) == 2
     assert object_by_size[0].id == 5
     assert object_by_size[1].id == 1
+
+    if estimator_precision != EstimatorPrecision.NoEstimates:
+        assert explorer.find_largest_common_reachable_object(2, 3) == 4
+        assert explorer.find_largest_common_reachable_object(1, 3) == 3
+        assert explorer.find_largest_common_reachable_object(2, 5) is None

@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BinaryHeap, HashMap, HashSet, VecDeque},
     error::Error,
     marker::PhantomData,
     rc::Rc,
@@ -690,6 +690,125 @@ impl HeapDumpExplorer {
                 }
             }
         }
+        Ok(None)
+    }
+
+    /// Find the largest object reachable from both of a pair of objects
+    fn find_largest_common_reachable_object(
+        &self,
+        obj_id1: Id,
+        obj_id2: Id,
+    ) -> anyhow::Result<Option<Id>> {
+        let rtxn = self.env.read_txn()?;
+        let remapped_db = self
+            .primary_db
+            .remap_data_type::<SerdeJson<ObjectRecordNoValue>>();
+
+        #[derive(Eq, PartialEq)]
+        enum Obj1Or2 {
+            Obj1,
+            Obj2,
+        }
+        #[derive(Eq, PartialEq)]
+        struct QueueItem {
+            id: Id,
+            subtree_size: u64,
+            successors: Vec<Id>,
+            obj_1_or_2: Obj1Or2,
+        }
+
+        impl Ord for QueueItem {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.subtree_size.cmp(&other.subtree_size)
+            }
+        }
+
+        impl PartialOrd for QueueItem {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        let mut queue = BinaryHeap::<QueueItem>::new();
+        let mut visited_from_1 = HashSet::<Id>::new();
+        let mut visited_from_2 = HashSet::<Id>::new();
+
+        fn make_queue_item(
+            remapped_db: &Database<IdDbType, SerdeJson<ObjectRecordNoValue>>,
+            rtxn: &heed::RoTxn,
+            obj_id: Id,
+            obj_1_or_2: Obj1Or2,
+        ) -> anyhow::Result<QueueItem> {
+            let record = remapped_db
+                .get(rtxn, &obj_id)?
+                .ok_or_else(|| anyhow::anyhow!("Object ID {} not found in database", obj_id))?;
+            make_queue_item_from_record(&record, obj_1_or_2)
+        }
+
+        fn make_queue_item_from_record(
+            record: &ObjectRecordNoValue,
+            obj_1_or_2: Obj1Or2,
+        ) -> anyhow::Result<QueueItem> {
+            Ok(QueueItem {
+                id: record.id,
+                subtree_size: record
+                    .subtree_size
+                    .ok_or(anyhow::anyhow!("No subtree size in {}", record.id))?,
+                successors: record.references.clone(),
+                obj_1_or_2,
+            })
+        }
+
+        queue.push(make_queue_item(
+            &remapped_db,
+            &rtxn,
+            obj_id1,
+            Obj1Or2::Obj1,
+        )?);
+        queue.push(make_queue_item(
+            &remapped_db,
+            &rtxn,
+            obj_id2,
+            Obj1Or2::Obj2,
+        )?);
+
+        while let Some(next) = queue.pop() {
+            match next.obj_1_or_2 {
+                Obj1Or2::Obj1 => {
+                    if !visited_from_1.insert(next.id) {
+                        continue;
+                    }
+                    if visited_from_2.contains(&next.id) {
+                        return Ok(Some(next.id));
+                    }
+                    for succ_id in next.successors {
+                        let record = remapped_db.get(&rtxn, &succ_id)?.ok_or_else(|| {
+                            anyhow::anyhow!("Object ID {} not found in database", succ_id)
+                        })?;
+                        if !should_skip_link_in_subtree_exploration(&record) {
+                            queue.push(make_queue_item_from_record(&record, Obj1Or2::Obj1)?);
+                        }
+                    }
+                }
+                Obj1Or2::Obj2 => {
+                    if !visited_from_2.insert(next.id) {
+                        continue;
+                    }
+                    if visited_from_1.contains(&next.id) {
+                        return Ok(Some(next.id));
+                    }
+                    for succ_id in next.successors {
+                        let record = remapped_db.get(&rtxn, &succ_id)?.ok_or_else(|| {
+                            anyhow::anyhow!("Object ID {} not found in database", succ_id)
+                        })?;
+                        if !should_skip_link_in_subtree_exploration(&record) {
+                            queue.push(make_queue_item_from_record(&record, Obj1Or2::Obj2)?);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(None)
     }
 }

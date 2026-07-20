@@ -1,12 +1,10 @@
-import json
 import argparse
-from http.client import HTTPSConnection
-from contextlib import ExitStack
-from urllib.parse import urlparse
-import boto3
 import base64
+import json
 import uuid
 from subprocess import run
+
+import boto3
 
 from midden.dump.inject import _TARBALL
 

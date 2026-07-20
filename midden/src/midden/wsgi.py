@@ -182,6 +182,45 @@ def create_app():
             avoid_ids=list(avoid_ids),
         )
 
+    @app.route("/explore/<dump_name>/find_largest_common_reachable_object")
+    def find_largest_common_reachable_object(dump_name):
+        """Find the largest common reachable object between two objects in the selected dump."""
+        explorer = get_dump(dump_name)
+        obj1_id = request.args.get("obj1_id", type=int)
+        obj2_id = request.args.get("obj2_id", type=int)
+        if obj1_id is None or obj2_id is None:
+            return "Missing obj1_id or obj2_id query parameters", 400
+        common_object_id = explorer.find_largest_common_reachable_object(
+            obj1_id, obj2_id
+        )
+        if common_object_id is None:
+            return render_template(
+                "largest_common_reachable_object.html",
+                dump_name=dump_name,
+                obj1_id=obj1_id,
+                obj2_id=obj2_id,
+                common_object=None,
+            )
+        common_object = explorer.get_object(common_object_id)
+        assert common_object is not None, (
+            f"Common object ID {common_object_id} not found in dump '{dump_name}'"
+        )
+        path_from_obj1 = explorer.find_path_between_objects(
+            obj1_id, common_object_id, avoiding_ids=set()
+        )
+        path_from_obj2 = explorer.find_path_between_objects(
+            obj2_id, common_object_id, avoiding_ids=set()
+        )
+        return render_template(
+            "largest_common_reachable_object.html",
+            dump_name=dump_name,
+            obj1_id=obj1_id,
+            obj2_id=obj2_id,
+            common_object=common_object,
+            path_from_obj1=path_from_obj1,
+            path_from_obj2=path_from_obj2,
+        )
+
     app.secret_key = os.urandom(
         16
     )  # This app keeps state in-process, so a per-process key is fine.
