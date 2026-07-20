@@ -20,6 +20,9 @@ ui = [
     "midden-analysis==0.1.0",
     "cheroot>=11.1.2",
 ]
+aws = [
+    "boto3>=1.43.50",
+]
 
 [project.scripts]
 midden-inject = "midden.dump.inject:main"

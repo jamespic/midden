@@ -16,6 +16,10 @@ import time
 from contextlib import contextmanager
 from subprocess import PIPE, Popen
 from typing import Literal
+from http.client import HTTPSConnection
+from contextlib import ExitStack
+from urllib.parse import urlparse
+
 
 try:
     from sys import remote_exec  # ty: ignore[unresolved-import]
@@ -43,6 +47,7 @@ except ImportError:
     pass
 
 DEFAULT_DUMP_FILE = "/tmp/dump.jsonl"
+DEFAULT_DUMP_ARCHIVE_FILE = "/tmp/dump.tar.gz"
 
 _FILES_NEEDED_FOR_INJECTION = ["dump_heap.py", "inject.py"]
 
@@ -85,19 +90,23 @@ def dump_heap_from_pid(
 
 def dump_all_python_processes(output_file=DEFAULT_DUMP_FILE):
     """Dump the heap of all running Python processes."""
-    output_path = pathlib.Path(output_file)
-    for pid in _list_all_python_processes():
-        output_dir = output_path.parent
-        output_file_basename = f"{output_path.stem}_{pid}{output_path.suffix}"
-        pid_specific_output_file = output_dir / output_file_basename
-        print(
-            f"Dumping heap of process {pid} to {pid_specific_output_file}",
-            file=sys.stderr,
-        )
-        try:
-            dump_heap_from_pid(pid, str(pid_specific_output_file))
-        except Exception as e:
-            print(f"Failed to dump heap of process {pid}: {e}", file=sys.stderr)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = pathlib.Path(tmpdir)
+        for pid in _list_all_python_processes():
+            pid_specific_output_file = output_dir / f"dump_{pid}.jsonl"
+            print(
+                f"Dumping heap of process {pid} to {pid_specific_output_file}",
+                file=sys.stderr,
+            )
+            try:
+                dump_heap_from_pid(pid, str(pid_specific_output_file))
+            except Exception as e:
+                print(f"Failed to dump heap of process {pid}: {e}", file=sys.stderr)
+        # Archive the dumps
+        archive_path = pathlib.Path(output_file)
+        with tarfile.open(archive_path, "w:gz") as tar:
+            for dump_file in output_dir.iterdir():
+                tar.add(dump_file, arcname=dump_file.name)
 
 
 def _list_all_python_processes() -> list[int]:
@@ -115,11 +124,16 @@ def _list_all_python_processes() -> list[int]:
 def _list_all_python_processes_psutil() -> list[int]:
     """List all running Python processes using psutil."""
     python_pids = []
-    for proc in psutil.process_iter(["pid", "exe"]):
+    for proc in psutil.process_iter(["pid", "exe", "memory_maps"]):
         try:
             exe = proc.exe()
             if exe and pathlib.Path(exe).name.startswith("python"):
                 python_pids.append(proc.info["pid"])
+                break
+            for m in proc.memory_maps(grouped=False):
+                if re.match(r".*lib(python\d\.\d.*)\.so", m.path):
+                    python_pids.append(proc.info["pid"])
+                    break
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return python_pids
@@ -134,6 +148,11 @@ def _list_all_python_processes_procfs() -> list[int]:
                 exe = os.readlink(f"/proc/{pid}/exe")
                 if pathlib.Path(exe).name.startswith("python"):
                     python_pids.append(int(pid))
+                with open(f"/proc/{pid}/maps") as f:
+                    for line in f:
+                        if re.match(r".*lib(python\d\.\d.*)\.so", line):
+                            python_pids.append(int(pid))
+                            break
             except (FileNotFoundError, PermissionError):
                 continue
     return python_pids
@@ -473,8 +492,8 @@ def _gdb_available() -> bool:
 def _inject_using_gdb(pid: int, script_file_name: str):
     """Inject the script into the target process using gdb."""
     gdb_cmds = [
-        "(char *) PyGILState_Ensure()",
-        '(void) PyRun_SimpleString("'
+        "(int) PyGILState_Ensure()",
+        '(int) PyRun_SimpleString("'
         rf'exec(open(\"{script_file_name}\").read())")',
         "(void) PyGILState_Release($1)",
     ]
@@ -524,6 +543,38 @@ def pid_type(value: str) -> PidType:
         raise argparse.ArgumentTypeError(f"Invalid PID: {value}")
 
 
+def _upload(url, file_path):
+    """Upload a file to a URL.
+
+    The main use case is uploading to an S3 presigned URL, but this function can be used for any HTTP PUT upload.
+    """
+    parsed_url = urlparse(url)
+    host = parsed_url.netloc
+    path = parsed_url.path + "?" + parsed_url.query
+
+    conn = HTTPSConnection(host)
+    with ExitStack() as stack:
+        stack.callback(conn.close)
+        file = stack.enter_context(open(file_path, "rb"))
+        content_length = file.seek(0, os.SEEK_END)  # Move to the end of the file to get its size
+        file.seek(0)  # Move back to the beginning of the file
+        conn.request(
+            "PUT",
+            path,
+            body=file,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(content_length),
+            },
+        )
+        response = conn.getresponse()
+        if response.status != 200:
+            raise RuntimeError(
+                f"Failed to upload file. Status code: {response.status}, Response: {response.read().decode()}"
+            )
+        response.read()  # Read the response to ensure the connection is closed properly
+
+
 def main():
     """CLI entry point for dumping a live Python process by PID."""
     parser = argparse.ArgumentParser(
@@ -537,7 +588,7 @@ def main():
     parser.add_argument(
         "--output-file",
         "-o",
-        default=DEFAULT_DUMP_FILE,
+        default=None,
         help=f"Path to output file (default: {DEFAULT_DUMP_FILE})",
     )
     parser.add_argument(
@@ -552,7 +603,19 @@ def main():
         dest="can_use_alternate_python_interpreter",
         help="Don't attempt to use an alternate Python interpreter for injection, even if the target process is running a different Python version.",
     )
+    parser.add_argument(
+        "--upload-url",
+        "-u",
+        default=None,
+        help="If provided, upload the dump file to this URL after dumping. The URL should be a presigned S3 PUT URL or any other HTTP PUT endpoint.",
+    )
     args = parser.parse_args()
+    
+    if args.output_file is None:
+        if args.pid == "all":
+            args.output_file = DEFAULT_DUMP_ARCHIVE_FILE
+        else:
+            args.output_file = DEFAULT_DUMP_FILE
 
     dump_heap_from_pid(
         args.pid,
@@ -560,6 +623,8 @@ def main():
         args.can_use_namespace_injection,
         args.can_use_alternate_python_interpreter,
     )
+    if args.upload_url:
+        _upload(args.upload_url, args.output_file)
 
 
 if __name__ == "__main__":
