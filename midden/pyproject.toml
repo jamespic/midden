@@ -1,6 +1,6 @@
 [project]
 name = "midden"
-version = "0.1.0"
+version = "0.2.0"
 description = "A simple heap analysis and visualization tool."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,7 +17,7 @@ Issues = "https://github.com/jamespic/midden/issues"
 ui = [
     "flask>=3.1.3",
     "psutil>=7.2.2",
-    "midden-analysis==0.1.0",
+    "midden-analysis==0.2.0",
     "cheroot>=11.1.2",
 ]
 aws = [
