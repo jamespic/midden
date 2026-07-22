@@ -14,6 +14,7 @@ use heed::{
     types::{Lazy, LazyDecode, SerdeJson, U64},
 };
 use pyo3::{prelude::*, types::PyString};
+use regex::regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -56,15 +57,6 @@ pub struct ObjectRecord {
     pub value: Option<String>,
     pub size: u64,
     pub subtree_size: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-struct ObjectRecordNoValue {
-    id: Id,
-    r#type: String,
-    references: Vec<Id>,
-    size: u64,
-    subtree_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -400,7 +392,7 @@ impl HeapDumpExplorer {
         let ro_iter = self
             .primary_db
             .iter(&ro_txn)?
-            .remap_data_type::<SerdeJson<ObjectRecordNoValue>>()
+            .remap_data_type::<SerdeJson<RawObjectRecord>>()
             .lazily_decode_data();
         let known_skips = std::collections::HashSet::new();
         let mut visitor = StronglyConnectedComponentsVisitor {
@@ -632,9 +624,9 @@ impl HeapDumpExplorer {
         avoiding_ids: HashSet<Id>,
     ) -> anyhow::Result<Option<Vec<ObjectSummary>>> {
         let rtxn = self.env.read_txn()?;
-        let mut queue: VecDeque<ObjectRecordNoValue> = VecDeque::new();
+        let mut queue: VecDeque<RawObjectRecord> = VecDeque::new();
         queue.push_back(self.get_and_decode_record(&rtxn, start_id)?);
-        let endpoint: ObjectRecordNoValue = self.get_and_decode_record(&rtxn, end_id)?;
+        let endpoint: RawObjectRecord = self.get_and_decode_record(&rtxn, end_id)?;
         let endpoint_subtree_size = endpoint.subtree_size;
 
         let mut predecessors = HashMap::new();
@@ -724,7 +716,7 @@ impl HeapDumpExplorer {
         let mut visited_from_2 = HashSet::<Id>::new();
 
         fn make_queue_item(
-            record: &ObjectRecordNoValue,
+            record: &RawObjectRecord,
             obj_1_or_2: Obj1Or2,
         ) -> anyhow::Result<QueueItem> {
             Ok(QueueItem {
@@ -789,21 +781,31 @@ where
 {
     explorer: &'vis HeapDumpExplorer,
     ro_txn: &'vis heed::RoTxn<'env>,
-    ro_iter: heed::RoIter<'vis, IdDbType, LazyDecode<SerdeJson<ObjectRecordNoValue>>>,
+    ro_iter: heed::RoIter<'vis, IdDbType, LazyDecode<SerdeJson<RawObjectRecord>>>,
     rw_txn: &'vis mut heed::RwTxn<'env>,
     known_skips: std::collections::HashSet<Id>,
     _estimator: PhantomData<SizeEstimatorT>,
 }
 
-fn should_skip_link_in_subtree_exploration(record: &ObjectRecordNoValue) -> bool {
-    /* Skip module links: they tend to collapse unrelated objects into huge SCCs. */
-    record.r#type == "builtins.module"
+fn should_skip_link_in_subtree_exploration(record: &RawObjectRecord) -> bool {
+    /* Skip:
+        - modules, since it's not useful to include them in subtree exploration.
+        - types, so that instance sizes are not inflated by including type objects.
+        - functions from various stdlib modules that bring in big subtrees
+    */
+    regex!(r"^(builtins.(module|type)$|(typing|copyreg|copy|contextlib|abc|ast)\.)")
+        .is_match(&record.r#type)
+        || record.r#type == "builtins.function"
+            && record
+                .value
+                .as_deref()
+                .is_some_and(|x| regex!(r"^(typing|copyreg|copy|contextlib|abc|ast)\.").is_match(x))
 }
 
 impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
     for StronglyConnectedComponentsVisitor<'vis, 'env, T>
 {
-    type NodeT = ObjectRecordNoValue;
+    type NodeT = RawObjectRecord;
     type NodeIdT = Id;
     type NodeAccT = usize;
     type SCCAccT = T;
@@ -814,7 +816,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         mut already_visited: impl FnMut(&Self::NodeIdT) -> bool,
     ) -> Result<Option<Self::NodeT>, Self::ErrorT> {
         for item in &mut self.ro_iter {
-            let (node_id, record): (Self::NodeIdT, Lazy<SerdeJson<ObjectRecordNoValue>>) = item?;
+            let (node_id, record): (Self::NodeIdT, Lazy<SerdeJson<RawObjectRecord>>) = item?;
             if !already_visited(&node_id) {
                 let record = record.decode().map_err(HeedError::Decoding)?;
                 return Ok(Some(record));
@@ -835,7 +837,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         let remapped_db = self
             .explorer
             .primary_db
-            .remap_data_type::<SerdeJson<ObjectRecordNoValue>>();
+            .remap_data_type::<SerdeJson<RawObjectRecord>>();
         let results = collect_results(node.references.iter().filter_map(|succ_id| {
             if self.known_skips.contains(succ_id) {
                 return None;
