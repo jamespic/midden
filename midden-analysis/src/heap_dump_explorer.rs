@@ -333,7 +333,7 @@ impl HeapDumpExplorer {
         type_key: &Type,
         entry: &SizeIndexEntry,
         size_index: Database<Type, SizeIndexEntry>,
-    ) -> heed::Result<()> {
+    ) -> anyhow::Result<()> {
         size_index.put(tx, type_key, entry)?;
         size_index.put(tx, &Type::AllTypes(), entry)?;
         Ok(())
@@ -363,7 +363,7 @@ impl HeapDumpExplorer {
         Ok(())
     }
 
-    fn build_type_summaries(&self, tx: &mut heed::RwTxn) -> heed::Result<()> {
+    fn build_type_summaries(&self, tx: &mut heed::RwTxn) -> anyhow::Result<()> {
         let rtx = self.env.read_txn()?;
         let mut last_type_key: Option<Type> = None;
         let mut total_size = 0;
@@ -392,7 +392,7 @@ impl HeapDumpExplorer {
     fn explore_strongly_connected_components<'vis, 'env, T: SizeEstimator>(
         &'env self,
         tx: &'vis mut heed::RwTxn<'env>,
-    ) -> heed::Result<()>
+    ) -> anyhow::Result<()>
     where
         'env: 'vis,
     {
@@ -419,7 +419,7 @@ impl HeapDumpExplorer {
         &self,
         tx: &heed::RoTxn,
         ids: &[Id],
-    ) -> heed::Result<Vec<ObjectSummary>> {
+    ) -> anyhow::Result<Vec<ObjectSummary>> {
         let summaries = collect_results(ids.iter().map(|id| self.get_summary(tx, *id)))?;
         Ok(summaries)
     }
@@ -444,15 +444,19 @@ impl HeapDumpExplorer {
         Ok(result)
     }
 
-    fn get_summary(&self, tx: &heed::RoTxn, id: Id) -> heed::Result<ObjectSummary> {
-        let remapped_db = self
-            .primary_db
-            .remap_data_type::<SerdeJson<ObjectSummary>>();
-        remapped_db.get(tx, &id).and_then(|opt| {
-            opt.ok_or_else(|| {
-                HeedError::Decoding(format!("Decoding error: Missing record for ID {}", id).into())
-            })
-        })
+    fn get_summary(&self, tx: &heed::RoTxn, id: Id) -> anyhow::Result<ObjectSummary> {
+        self.get_and_decode_record(tx, id)
+    }
+
+    fn get_and_decode_record<'a, T: Deserialize<'a> + 'static>(
+        &self,
+        tx: &'a heed::RoTxn,
+        id: Id,
+    ) -> anyhow::Result<T> {
+        let remapped_db = self.primary_db.remap_data_type::<SerdeJson<T>>();
+        remapped_db
+            .get(tx, &id)?
+            .ok_or_else(|| anyhow::anyhow!("Decoding error: Missing record for ID {id}"))
     }
 }
 
@@ -628,18 +632,9 @@ impl HeapDumpExplorer {
         avoiding_ids: HashSet<Id>,
     ) -> anyhow::Result<Option<Vec<ObjectSummary>>> {
         let rtxn = self.env.read_txn()?;
-        let remapped_db = self
-            .primary_db
-            .remap_data_type::<SerdeJson<ObjectRecordNoValue>>();
         let mut queue: VecDeque<ObjectRecordNoValue> = VecDeque::new();
-        queue.push_back(
-            remapped_db
-                .get(&rtxn, &start_id)?
-                .ok_or_else(|| anyhow::anyhow!("Start ID {} not found in database", start_id))?,
-        );
-        let endpoint = remapped_db
-            .get(&rtxn, &end_id)?
-            .ok_or_else(|| anyhow::anyhow!("End ID {} not found in database", end_id))?;
+        queue.push_back(self.get_and_decode_record(&rtxn, start_id)?);
+        let endpoint: ObjectRecordNoValue = self.get_and_decode_record(&rtxn, end_id)?;
         let endpoint_subtree_size = endpoint.subtree_size;
 
         let mut predecessors = HashMap::new();
@@ -676,9 +671,7 @@ impl HeapDumpExplorer {
                 if avoiding_ids.contains(&ref_id) {
                     continue;
                 }
-                let obj = remapped_db.get(&rtxn, &ref_id)?.ok_or_else(|| {
-                    anyhow::anyhow!("Decoding error: Missing record for ID {}", ref_id)
-                })?;
+                let obj = self.get_and_decode_record(&rtxn, ref_id)?;
                 if should_skip_link_in_subtree_exploration(&obj) {
                     dead_ends.insert(ref_id);
                     continue;
@@ -700,9 +693,6 @@ impl HeapDumpExplorer {
         obj_id2: Id,
     ) -> anyhow::Result<Option<Id>> {
         let rtxn = self.env.read_txn()?;
-        let remapped_db = self
-            .primary_db
-            .remap_data_type::<SerdeJson<ObjectRecordNoValue>>();
 
         #[derive(Eq, PartialEq)]
         enum Obj1Or2 {
@@ -734,18 +724,6 @@ impl HeapDumpExplorer {
         let mut visited_from_2 = HashSet::<Id>::new();
 
         fn make_queue_item(
-            remapped_db: &Database<IdDbType, SerdeJson<ObjectRecordNoValue>>,
-            rtxn: &heed::RoTxn,
-            obj_id: Id,
-            obj_1_or_2: Obj1Or2,
-        ) -> anyhow::Result<QueueItem> {
-            let record = remapped_db
-                .get(rtxn, &obj_id)?
-                .ok_or_else(|| anyhow::anyhow!("Object ID {} not found in database", obj_id))?;
-            make_queue_item_from_record(&record, obj_1_or_2)
-        }
-
-        fn make_queue_item_from_record(
             record: &ObjectRecordNoValue,
             obj_1_or_2: Obj1Or2,
         ) -> anyhow::Result<QueueItem> {
@@ -753,22 +731,18 @@ impl HeapDumpExplorer {
                 id: record.id,
                 subtree_size: record
                     .subtree_size
-                    .ok_or(anyhow::anyhow!("No subtree size in {}", record.id))?,
+                    .ok_or_else(|| anyhow::anyhow!("No subtree size in {}", record.id))?,
                 successors: record.references.clone(),
                 obj_1_or_2,
             })
         }
 
         queue.push(make_queue_item(
-            &remapped_db,
-            &rtxn,
-            obj_id1,
+            &self.get_and_decode_record(&rtxn, obj_id1)?,
             Obj1Or2::Obj1,
         )?);
         queue.push(make_queue_item(
-            &remapped_db,
-            &rtxn,
-            obj_id2,
+            &self.get_and_decode_record(&rtxn, obj_id2)?,
             Obj1Or2::Obj2,
         )?);
 
@@ -782,11 +756,9 @@ impl HeapDumpExplorer {
                         return Ok(Some(next.id));
                     }
                     for succ_id in next.successors {
-                        let record = remapped_db.get(&rtxn, &succ_id)?.ok_or_else(|| {
-                            anyhow::anyhow!("Object ID {} not found in database", succ_id)
-                        })?;
+                        let record = self.get_and_decode_record(&rtxn, succ_id)?;
                         if !should_skip_link_in_subtree_exploration(&record) {
-                            queue.push(make_queue_item_from_record(&record, Obj1Or2::Obj1)?);
+                            queue.push(make_queue_item(&record, Obj1Or2::Obj1)?);
                         }
                     }
                 }
@@ -798,11 +770,9 @@ impl HeapDumpExplorer {
                         return Ok(Some(next.id));
                     }
                     for succ_id in next.successors {
-                        let record = remapped_db.get(&rtxn, &succ_id)?.ok_or_else(|| {
-                            anyhow::anyhow!("Object ID {} not found in database", succ_id)
-                        })?;
+                        let record = self.get_and_decode_record(&rtxn, succ_id)?;
                         if !should_skip_link_in_subtree_exploration(&record) {
-                            queue.push(make_queue_item_from_record(&record, Obj1Or2::Obj2)?);
+                            queue.push(make_queue_item(&record, Obj1Or2::Obj2)?);
                         }
                     }
                 }
@@ -837,7 +807,7 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
     type NodeIdT = Id;
     type NodeAccT = usize;
     type SCCAccT = T;
-    type ErrorT = HeedError;
+    type ErrorT = anyhow::Error;
 
     fn next_unvisited_node(
         &mut self,
@@ -912,13 +882,8 @@ impl<'vis, 'env, T: SizeEstimator> GraphSCCVisitor
         _node_acc_this_scc: &Self::NodeAccT,
         scc_acc: &Self::SCCAccT,
     ) -> Result<(), Self::ErrorT> {
-        let mut record = self
-            .explorer
-            .primary_db
-            .get(self.rw_txn, node_id)?
-            .ok_or_else(|| {
-                HeedError::Decoding(format!("Missing record for node ID {}", node_id).into())
-            })?;
+        let mut record: RawObjectRecord =
+            self.explorer.get_and_decode_record(self.rw_txn, *node_id)?;
         let subtree_size = scc_acc.total();
         record.subtree_size = Some(subtree_size);
         self.explorer
